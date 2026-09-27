@@ -18,9 +18,8 @@ import android.util.Log
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import androidx.core.app.NotificationCompat
-import com.screenclicker.capture.AccessibilityCapture
+import com.screenclicker.capture.Capturers
 import com.screenclicker.capture.CaptureResult
-import com.screenclicker.capture.ScreenCapturer
 import com.screenclicker.engine.ScriptRunner
 import com.screenclicker.store.ScriptStore
 import com.screenclicker.store.SettingsRepo
@@ -180,8 +179,8 @@ class ClickerAccessibilityService : AccessibilityService() {
             store.loadTemplate(rule)?.let { templates[rule.id] = it }
         }
 
-        val runner = ScriptRunner(SettingsRepo(context), AccessibilityCapture())
         val settings = SettingsRepo(context).load()
+        val runner = ScriptRunner(SettingsRepo(context), Capturers.pick(settings))
         SettingsRepo(context).setLastRunScriptId(scriptId)
         val detectionGen = if (settings.showDetections) showDetectionOverlay() else -1
         runnerJob = serviceScope.launch {

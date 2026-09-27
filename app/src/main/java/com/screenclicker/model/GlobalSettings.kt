@@ -17,4 +17,6 @@ data class GlobalSettings(
     val showDetections: Boolean = true,
     /** Minimum time between screen scans while running. */
     val scanIntervalMs: Long = 500,
+    /** Capture backend: see [com.screenclicker.capture.Capturers]. */
+    val captureBackend: String = "auto",
 )

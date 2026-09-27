@@ -2,6 +2,7 @@ package com.screenclicker
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -17,6 +18,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
+import com.screenclicker.capture.CaptureProjectionService
 import com.screenclicker.store.ScriptStore
 import com.screenclicker.store.SettingsRepo
 import com.screenclicker.ui.Screen
@@ -32,6 +34,20 @@ class MainActivity : ComponentActivity() {
 
     private val requestNotifications =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
+    /** Consent dialog for the fast MediaProjection capture backend. */
+    private val projectionConsent =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val data = result.data
+            if (result.resultCode == RESULT_OK && data != null) {
+                CaptureProjectionService.start(this, result.resultCode, data)
+            }
+        }
+
+    private fun launchProjectionConsent() {
+        val manager = getSystemService(MediaProjectionManager::class.java)
+        projectionConsent.launch(manager.createScreenCaptureIntent())
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -74,6 +90,7 @@ class MainActivity : ComponentActivity() {
 
             Screen.Settings -> AppSettingsScreen(
                 settingsRepo = settingsRepo,
+                onGrantProjection = ::launchProjectionConsent,
                 onBack = { screen = Screen.Scripts },
             )
         }

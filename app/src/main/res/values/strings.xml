@@ -11,6 +11,11 @@
     <string name="channel_overlay_description">Shown while the rule editor is on screen.</string>
     <string name="overlay_notification_text">Editing a rule on screen</string>
 
+    <string name="channel_capture">Screen capture</string>
+    <string name="channel_capture_description">Shown while the fast screen-capture session is live.</string>
+    <string name="capture_notification_text">Screen capture is active</string>
+    <string name="capture_stop">Stop</string>
+
     <string name="overlay_role_search">Search area</string>
     <string name="overlay_role_template">Capture area</string>
     <string name="overlay_role_click">Click area</string>

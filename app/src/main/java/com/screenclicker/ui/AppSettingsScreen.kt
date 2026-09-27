@@ -18,6 +18,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -40,9 +41,10 @@ import androidx.compose.ui.unit.dp
 import com.screenclicker.accessibility.ClickerAccessibilityService
 import com.screenclicker.capture.AccessibilityCapture
 import com.screenclicker.capture.CaptureResult
+import com.screenclicker.capture.CaptureProjectionService
+import com.screenclicker.capture.Capturers
 import com.screenclicker.model.GlobalSettings
 import com.screenclicker.store.SettingsRepo
-import com.screenclicker.ui.CalibrationCard
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -53,6 +55,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun AppSettingsScreen(
     settingsRepo: SettingsRepo,
+    onGrantProjection: () -> Unit,
     onBack: () -> Unit,
 ) {
     var settings by remember { mutableStateOf(settingsRepo.load()) }
@@ -115,8 +118,77 @@ fun AppSettingsScreen(
             }
         }
 
+        CaptureCard(
+            settings = settings,
+            onChange = ::save,
+            onGrantProjection = onGrantProjection,
+        )
         AccessibilityCard()
         DiagnosticsCard()
+    }
+}
+
+@Composable
+private fun CaptureCard(
+    settings: GlobalSettings,
+    onChange: (GlobalSettings) -> Unit,
+    onGrantProjection: () -> Unit,
+) {
+    val context = LocalContext.current
+    var projectionReady by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            projectionReady = CaptureProjectionService.isReady
+            delay(2_000)
+        }
+    }
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Screen capture", style = MaterialTheme.typography.titleSmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = settings.captureBackend == Capturers.BACKEND_AUTO,
+                    onClick = { onChange(settings.copy(captureBackend = Capturers.BACKEND_AUTO)) },
+                    label = { Text("Auto") },
+                )
+                FilterChip(
+                    selected = settings.captureBackend == Capturers.BACKEND_ACCESSIBILITY,
+                    onClick = {
+                        onChange(settings.copy(captureBackend = Capturers.BACKEND_ACCESSIBILITY))
+                    },
+                    label = { Text("Accessibility") },
+                )
+                FilterChip(
+                    selected = settings.captureBackend == Capturers.BACKEND_MEDIA_PROJECTION,
+                    onClick = {
+                        onChange(settings.copy(captureBackend = Capturers.BACKEND_MEDIA_PROJECTION))
+                    },
+                    label = { Text("Fast") },
+                )
+            }
+            Text(
+                text = "Fast capture (MediaProjection) can read the screen many times per " +
+                    "second for fast reaction; accessibility capture is limited to about " +
+                    "one per second. Auto uses fast capture when granted, else " +
+                    "accessibility. The backend choice is read when a script starts.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                text = if (projectionReady) "Fast capture: granted and running" else "Fast capture: not granted",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onGrantProjection) {
+                    Text(if (projectionReady) "Re-grant" else "Grant screen capture")
+                }
+                if (projectionReady) {
+                    OutlinedButton(onClick = { CaptureProjectionService.stop(context) }) {
+                        Text("Stop capture")
+                    }
+                }
+            }
+        }
     }
 }
 
