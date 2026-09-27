@@ -23,10 +23,15 @@ second; faster calls fail with `ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT`). Tha
 reaction-time floor of the accessibility backend. The design answer:
 
 - `capture/ScreenCapturer` is the seam. The runner never knows which backend it has.
-- `AccessibilityCapture` — always available, no prompts, ≈1 fps.
-- `MediaProjectionCapture` — the fast path (10+ fps possible), but it needs a consent
-  dialog per capture session and a foreground service with type `mediaProjection` running
-  *before* `getMediaProjection()` on Android 14+.
+- `AccessibilityCapture` — always available, no prompts, ≈1 fps (system-throttled; we
+  wait out the window ourselves inside the service's capture mutex).
+- `MediaProjectionCapture` — the fast path (frame-rate capture), one consent prompt per
+  capture session; `CaptureProjectionService` must be foregrounded with type
+  `mediaProjection` BEFORE `getMediaProjection()` on Android 14+. A static screen emits
+  no frame callbacks at all, so its capture() returns the newest cached frame — the
+  correct answer when nothing changed.
+- `Capturers.pick(settings)` resolves the backend at script start: auto (fast when
+  granted) / accessibility / fast. Backend changes take effect on the next run.
 
 Adding a second backend later must not require touching the runner. That is the whole
 point of the interface.
@@ -36,7 +41,8 @@ point of the interface.
 ```
 app/
   accessibility/  ClickerAccessibilityService — capture + taps + foreground-app detection
-  capture/        ScreenCapturer interface, AccessibilityCapture, MediaProjectionCapture
+  capture/        ScreenCapturer seam, AccessibilityCapture, MediaProjectionCapture,
+                  CaptureProjectionService (fast backend), Capturers (backend factory)
   vision/         TemplateMatcher — pure Kotlin on IntArray pixels, no android.* imports
   engine/         ScriptRunner — scan loop, rule evaluation, delay+jitter, cadence
   model/          Script/Rule/Settings — kotlinx.serialization JSON + PNG templates
@@ -54,6 +60,17 @@ app/
 - **Overlay windows are plain Views, not Compose** (same reasoning as floating-dpad:
   Compose inside a `WindowManager` window needs lifecycle-owner shims and adds
   recomposition cost). Compose is for the in-app screens only.
+- **Overlay windows use FLAG_LAYOUT_NO_LIMITS + FLAG_LAYOUT_IN_SCREEN** so view
+  coordinates equal screenshot pixels (status bar included). Never switch to default
+  window geometry — every stored rect would be off by the status bar height.
+- **Template capture hides the config overlay during the shot.** takeScreenshot
+  captures everything on screen including our own rectangles; the overlay sets itself
+  INVISIBLE for the capture and restores right after (with a settle delay so the
+  compositor drops the hidden frame).
+- **The MediaProjection backend has no rotation handling.** The VirtualDisplay is
+  created at the current maximum-window-metrics size; after rotation the frames
+  letterbox and matching breaks. Re-grant capture after rotating, or recreate the
+  virtual display on config changes as a proper fix.
 - **Coordinates are physical pixels.** Screenshots arrive in native display pixels and
   `dispatchGesture` expects the same space; never mix in dp. Config data stores px rects
   captured at config time. If the display size changes (rotation, resolution setting),
@@ -103,12 +120,16 @@ app/
 | # | Milestone | State |
 |---|---|---|
 | M0 | Scaffold + CI producing a debug APK artifact | done, verified green 2026-09-27 |
-| M1 | Accessibility service shell (screenshot, tap test) | pending |
-| M2 | Template matcher + JVM unit tests | pending |
-| M3 | Data model + persistence + script editor | pending |
-| M4 | Config overlay (rects, template capture, live preview) | pending |
-| M5 | Runner (multi-rule, delay+jitter, random tap, QS tile) | pending |
-| M6 | Detection highlights overlay | pending |
-| M7 | Reaction-time calibration | pending |
-| M8 | MediaProjection fast capture backend | pending |
-| M9 | Script→app binding, polish, docs | pending |
+| M1 | Accessibility service shell (screenshot, tap test) | code done; on-device check pending |
+| M2 | Template matcher + JVM unit tests | done (12 tests green in CI) |
+| M3 | Data model + persistence + script editor | done |
+| M4 | Config overlay (rects, template capture, live preview) | code done; on-device check pending |
+| M5 | Runner (multi-rule, delay+jitter, random tap, QS tile) | code done; on-device check pending |
+| M6 | Detection highlights overlay | code done; on-device check pending |
+| M7 | Reaction-time calibration | code done; on-device check pending |
+| M8 | MediaProjection fast capture backend | code done; on-device check pending |
+| M9 | Script→app binding (in runner), polish, docs | done |
+
+All milestones are built and unit-tested. The remaining verification is physical:
+sideload, grant permissions, and run a script on a real screen — the build machine
+cannot do that part.

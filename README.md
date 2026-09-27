@@ -11,16 +11,24 @@ persistent human.
 ## What it does
 
 - Detect an image you picked, anywhere inside a region you drew, with an adjustable
-  similarity threshold
+  similarity threshold (works across brightness/dark-mode shifts — normalized
+  correlation, not raw pixel difference)
 - Tap on the detected image itself, or on a different region you drew — always at a
   random point inside the bounds, never the same pixel twice
 - Optional delay between detection and tap, with random fuzz so the timing is never
   machine-perfect
 - One configuration ("script") can hold many independent rules: image A → tap X,
-  image B → tap Y
+  image B → tap Y; rules can be per-app (only run while a chosen app is foreground)
+- Click cadence per rule: once per appearance (default — waits for the image to
+  disappear before clicking again) or repeat-while-visible on an interval
+- Configure by drawing: the on-screen editor draws rectangles over the app you're
+  automating, captures the template from the live screen, and shows a live match
+  check before you save
 - "Show detections" highlights what it just recognized while the script runs
 - A reaction-time test in settings measures how fast you'd have tapped yourself, and
   offers that as the default delay
+- Two capture engines: accessibility screenshots (no extra prompts, ~1 scan/second)
+  and a fast MediaProjection engine (many scans per second) — pick Auto, or force one
 
 ## What it needs
 
