@@ -47,6 +47,17 @@
           keep that window alive while the user is actively editing; it captures nothing.
         -->
         <service
+            android:name=".tile.ClickerTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_notification"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
+        <service
             android:name=".overlay.ConfigOverlayService"
             android:exported="false"
             android:foregroundServiceType="specialUse">

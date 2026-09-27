@@ -2,18 +2,36 @@ package com.screenclicker.accessibility
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Path
+import android.os.Build
 import android.os.Handler
-import android.view.Display
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
+import android.view.Display
 import android.view.accessibility.AccessibilityEvent
+import androidx.core.app.NotificationCompat
+import com.screenclicker.capture.AccessibilityCapture
 import com.screenclicker.capture.CaptureResult
+import com.screenclicker.capture.ScreenCapturer
+import com.screenclicker.engine.ScriptRunner
+import com.screenclicker.store.ScriptStore
+import com.screenclicker.store.SettingsRepo
+import com.screenclicker.vision.GrayImage
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -22,8 +40,9 @@ import kotlin.coroutines.resume
 
 /**
  * The privileged half of the app: this one component can both read the screen
- * ([takeScreenshot], API 30+) and inject touches ([dispatchGesture]). Everything else in
- * the app reaches the screen through it.
+ * ([takeScreenshot], API 30+) and inject touches ([dispatchGesture]). It also hosts the
+ * [ScriptRunner] — the engine needs the accessibility connection alive, so this is the
+ * natural home for it.
  *
  * Lifecycle: Android binds this when the user enables the service in accessibility
  * settings and unbinds it when they disable it or the system revokes it. There is at
@@ -46,10 +65,20 @@ class ClickerAccessibilityService : AccessibilityService() {
         /** How long the synthetic finger stays down. Short enough to feel instant. */
         private const val TAP_DURATION_MS = 60L
 
+        private const val ENGINE_CHANNEL_ID = "engine"
+        private const val ENGINE_NOTIFICATION_ID = 42
+        const val ACTION_START = "com.screenclicker.action.START"
+        const val ACTION_STOP = "com.screenclicker.action.STOP"
+        const val EXTRA_SCRIPT_ID = "scriptId"
+
         @Volatile
         private var instance: ClickerAccessibilityService? = null
 
         val isRunning: Boolean get() = instance != null
+
+        /** Id of the script currently executing, or null. UI and QS tile observe this. */
+        private val _runningScriptId = MutableStateFlow<String?>(null)
+        val runningScriptId = _runningScriptId.asStateFlow()
 
         /** Package of the app currently in the foreground, when we can see it. */
         val foregroundPackage: String?
@@ -63,13 +92,30 @@ class ClickerAccessibilityService : AccessibilityService() {
         /** Taps the screen at the given coordinates; returns false when it did not land. */
         suspend fun tap(x: Float, y: Float): Boolean =
             instance?.tap(x, y) ?: false
+
+        /**
+         * Starts running the script with [scriptId]. Returns false when the
+         * accessibility service is not enabled (nothing can run without it).
+         */
+        fun startScript(context: android.content.Context, scriptId: String): Boolean {
+            val service = instance ?: return false
+            service.beginRun(scriptId)
+            return true
+        }
+
+        fun stopScript() {
+            instance?.endRun()
+        }
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     /** Serializes screenshot requests; see MIN_CAPTURE_INTERVAL_MS. */
     private val captureMutex = Mutex()
     private var lastCaptureRequestAt = 0L
+
+    private var runnerJob: Job? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -79,19 +125,109 @@ class ClickerAccessibilityService : AccessibilityService() {
 
     override fun onUnbind(intent: Intent?): Boolean {
         if (instance === this) instance = null
+        endRun()
         Log.i(TAG, "Accessibility service unbound")
         return super.onUnbind(intent)
     }
 
     override fun onDestroy() {
         if (instance === this) instance = null
+        endRun()
+        serviceScope.cancel()
         super.onDestroy()
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_START -> intent.getStringExtra(EXTRA_SCRIPT_ID)?.let { beginRun(it) }
+            ACTION_STOP -> endRun()
+        }
+        return START_NOT_STICKY
     }
 
     // Not used for detection; the scan loop drives itself on a timer. We only listen to
     // window-state events so the system keeps the connection healthy and cheap.
     override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
     override fun onInterrupt() = Unit
+
+    /**
+     * Starts the scan-and-click loop for one script. Any previous run is stopped first.
+     * Templates are decoded once here; the loop then runs on the service scope so it
+     * dies with the service.
+     */
+    private fun beginRun(scriptId: String) {
+        if (runnerJob?.isActive == true) endRun()
+        val context = this
+        val store = ScriptStore(context)
+        val script = store.list().firstOrNull { it.id == scriptId }
+        if (script == null) {
+            Log.w(TAG, "startScript: script $scriptId not found")
+            return
+        }
+        val templates = HashMap<String, GrayImage>()
+        for (rule in script.rules) {
+            store.loadTemplate(rule)?.let { templates[rule.id] = it }
+        }
+
+        val runner = ScriptRunner(SettingsRepo(context), AccessibilityCapture())
+        SettingsRepo(context).setLastRunScriptId(scriptId)
+        runnerJob = serviceScope.launch {
+            _runningScriptId.value = scriptId
+            showRunNotification(script.name)
+            try {
+                runner.run(
+                    script = script,
+                    templates = templates,
+                    foregroundPackage = { foregroundPackage },
+                    onTap = { x, y -> tap(x.toFloat(), y.toFloat()) },
+                    onEvent = { Log.i(TAG, "runner: $it") },
+                )
+            } catch (e: Exception) {
+                if (e !is kotlinx.coroutines.CancellationException) {
+                    Log.e(TAG, "runner crashed", e)
+                }
+            } finally {
+                _runningScriptId.value = null
+                cancelRunNotification()
+            }
+        }
+    }
+
+    private fun endRun() {
+        runnerJob?.cancel()
+        runnerJob = null
+        _runningScriptId.value = null
+        cancelRunNotification()
+    }
+
+    private fun showRunNotification(scriptName: String) {
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(
+            NotificationChannel(
+                ENGINE_CHANNEL_ID,
+                "Script running",
+                NotificationManager.IMPORTANCE_LOW,
+            ).apply { description = "Shown while a clicker script is running." },
+        )
+        val stopIntent = PendingIntent.getService(
+            this,
+            0,
+            Intent(this, ClickerAccessibilityService::class.java).setAction(ACTION_STOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val notification = NotificationCompat.Builder(this, ENGINE_CHANNEL_ID)
+            .setSmallIcon(com.screenclicker.R.drawable.ic_notification)
+            .setContentTitle(getString(com.screenclicker.R.string.app_name))
+            .setContentText("Running: $scriptName")
+            .setOngoing(true)
+            .addAction(0, "Stop", stopIntent)
+            .build()
+        manager.notify(ENGINE_NOTIFICATION_ID, notification)
+    }
+
+    private fun cancelRunNotification() {
+        getSystemService(NotificationManager::class.java).cancel(ENGINE_NOTIFICATION_ID)
+    }
 
     /**
      * One screenshot, throttled to the system rate limit. Returns [CaptureResult.Success]
@@ -122,7 +258,9 @@ class ClickerAccessibilityService : AccessibilityService() {
 
                         override fun onFailure(errorCode: Int) {
                             if (cont.isActive) {
-                                cont.resume(CaptureResult.Failure("takeScreenshot failed ($errorCode)"))
+                                cont.resume(
+                                    CaptureResult.Failure("takeScreenshot failed ($errorCode)"),
+                                )
                             }
                         }
                     },

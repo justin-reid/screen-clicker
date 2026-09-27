@@ -15,13 +15,17 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import android.widget.Toast
+import com.screenclicker.accessibility.ClickerAccessibilityService
 import com.screenclicker.model.Script
 import com.screenclicker.store.ScriptStore
 
@@ -32,6 +36,8 @@ fun ScriptsScreen(
     onOpenSettings: () -> Unit,
 ) {
     var scripts by remember { mutableStateOf(store.list()) }
+    val runningId by ClickerAccessibilityService.runningScriptId.collectAsState()
+    val context = LocalContext.current
 
     Column(
         modifier = Modifier
@@ -69,8 +75,23 @@ fun ScriptsScreen(
             items(scripts, key = { it.id }) { script ->
                 ScriptRow(
                     script = script,
+                    running = runningId == script.id,
                     onOpen = { onOpenScript(script.id) },
+                    onToggleRun = {
+                        if (runningId == script.id) {
+                            ClickerAccessibilityService.stopScript()
+                        } else {
+                            if (!ClickerAccessibilityService.startScript(context, script.id)) {
+                                Toast.makeText(
+                                    context,
+                                    "Enable the Screen Clicker accessibility service first",
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                            }
+                        }
+                    },
                     onDelete = {
+                        if (runningId == script.id) ClickerAccessibilityService.stopScript()
                         store.delete(script.id)
                         scripts = store.list()
                     },
@@ -95,7 +116,9 @@ fun ScriptsScreen(
 @Composable
 private fun ScriptRow(
     script: Script,
+    running: Boolean,
     onOpen: () -> Unit,
+    onToggleRun: () -> Unit,
     onDelete: () -> Unit,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
@@ -117,6 +140,9 @@ private fun ScriptRow(
                     )
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Button(onClick = onToggleRun) {
+                        Text(if (running) "Stop" else "Run")
+                    }
                     OutlinedButton(onClick = onOpen) { Text("Edit") }
                     TextButton(onClick = onDelete) { Text("Delete") }
                 }

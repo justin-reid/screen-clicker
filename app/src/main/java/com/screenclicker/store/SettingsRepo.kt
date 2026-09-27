@@ -33,8 +33,16 @@ class SettingsRepo(context: Context) {
             .apply()
     }
 
+    /** Id of the most recently started script — the QS tile's toggle target. */
+    fun lastRunScriptId(): String? = prefs.getString(KEY_LAST_RUN, null)
+
+    fun setLastRunScriptId(id: String) {
+        prefs.edit().putString(KEY_LAST_RUN, id).apply()
+    }
+
     private companion object {
         const val KEY_DELAY = "defaultDelayMs"
+        const val KEY_LAST_RUN = "lastRunScriptId"
         const val KEY_JITTER = "defaultJitterMs"
         const val KEY_THRESHOLD = "defaultThreshold"
         const val KEY_INTERVAL = "defaultIntervalMs"
