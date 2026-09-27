@@ -29,6 +29,7 @@ import com.screenclicker.model.Rule
 import com.screenclicker.store.ScriptStore
 import com.screenclicker.store.SettingsRepo
 import com.screenclicker.ui.openAccessibilitySettings
+import com.screenclicker.vision.Confidence
 import com.screenclicker.vision.GrayImage
 import com.screenclicker.vision.TemplateMatcher
 import kotlinx.coroutines.CoroutineScope
@@ -727,6 +728,12 @@ class ConfigOverlayService : Service() {
                         val name = withContext(Dispatchers.Default) {
                             store.saveTemplateFromBitmap(ruleId, crop)
                         }
+                        // A crop of nothing but background cannot be located, however well some
+                        // patch of screen correlates with it at run time: say so now, while the
+                        // image can still be re-captured at full visibility.
+                        val locatable = withContext(Dispatchers.Default) {
+                            TemplateMatcher.isLocatable(grayOf(crop))
+                        }
                         // A new template now exists, and the alignment/frame recorded above are
                         // the ones this crop was taken with, so Save may persist them.
                         templateCapturedThisSession = true
@@ -752,6 +759,10 @@ class ConfigOverlayService : Service() {
                             buildString {
                                 append("Template captured (${region.width}x${region.height})")
                                 if (!probed) append(" — alignment probe not visible")
+                                if (!locatable) {
+                                    append(" — almost no contrast: re-capture it while the ")
+                                    append("image is fully visible")
+                                }
                                 append(frameNote)
                             },
                         )
@@ -771,6 +782,16 @@ class ConfigOverlayService : Service() {
                 busy = false
             }
         }
+    }
+
+    /** Match scores read as whole percents wherever they are shown. */
+    private fun percent(score: Float): String = "${(score * 100).toInt()}%"
+
+    /** Luma of a captured crop, for the capture-time "can this be located?" check. */
+    private fun grayOf(bitmap: Bitmap): GrayImage {
+        val argb = IntArray(bitmap.width * bitmap.height)
+        bitmap.getPixels(argb, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+        return GrayImage.fromArgb(argb, bitmap.width, bitmap.height)
     }
 
     private fun checkMatch() {
@@ -811,27 +832,40 @@ class ConfigOverlayService : Service() {
                             return@launch
                         }
                         // Convert and search only the search region, off the main thread.
-                        val match = withContext(Dispatchers.Default) {
+                        val outcome = withContext(Dispatchers.Default) {
                             val scan = GrayImage.fromArgbRegion(
                                 result.argb,
                                 result.width,
                                 result.height,
                                 region,
                             )
-                            TemplateMatcher.findBest(
+                            TemplateMatcher.search(
                                 scan,
                                 template,
                                 PxRect(0, 0, region.width, region.height),
-                                0f,
                             )
                         }
+                        val best = outcome.best
                         setStatus(
-                            match?.let {
-                                val left = it.left + region.left
-                                val top = it.top + region.top
-                                "Best match ${(it.score * 100).toInt()}% at ($left,$top)" +
-                                    " — threshold ${(current.threshold * 100).toInt()}%"
-                            } ?: "Nothing found",
+                            when {
+                                // Check exists to answer "would Run find this?". A bare score
+                                // cannot: a template with nothing in it, or two candidates that
+                                // score alike, would read as a find and then behave differently
+                                // in Run, which is the report this is here to stop.
+                                outcome.confidence == Confidence.NO_CONTRAST ->
+                                    "Template has almost no contrast — re-capture it while the " +
+                                        "image is fully visible"
+                                best == null -> "Nothing found"
+                                outcome.confidence == Confidence.AMBIGUOUS ->
+                                    "Best ${percent(best.score)} at " +
+                                        "(${best.left + region.left},${best.top + region.top}) but a " +
+                                        "second candidate scores ${percent(outcome.runnerUp)} — " +
+                                        "not a reliable find"
+                                else ->
+                                    "Best match ${percent(best.score)} at " +
+                                        "(${best.left + region.left},${best.top + region.top})" +
+                                        " — threshold ${(current.threshold * 100).toInt()}%"
+                            },
                         )
                     }
 

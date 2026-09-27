@@ -19,7 +19,7 @@ class SettingsRepo(context: Context) {
         defaultThreshold = prefs.getFloat(KEY_THRESHOLD, 0.90f),
         defaultIntervalMs = prefs.getLong(KEY_INTERVAL, 1_000L),
         showDetections = prefs.getBoolean(KEY_SHOW_DETECTIONS, true),
-        scanIntervalMs = prefs.getLong(KEY_SCAN_INTERVAL, 500L),
+        scanIntervalMs = prefs.getLong(KEY_SCAN_INTERVAL, 150L),
         captureBackend = prefs.getString(KEY_BACKEND, "auto").orEmpty().ifBlank { "auto" },
         controlPanelEnabled = prefs.getBoolean(KEY_CONTROL_PANEL, false),
     )

@@ -128,15 +128,61 @@ class TemplateMatcherTest {
     }
 
     @Test
-    fun `uniform template matches via MAD fallback`() {
+    fun `a featureless template is reported as having no contrast`() {
+        // A crop of nothing but background cannot say where anything is, however well some
+        // patch of screen happens to correlate with it. This is the shape of a template
+        // captured while the image was invisible.
         val gradient = gradientScreen(200, 150)
         val flat = GrayImage(16, 16, IntArray(16 * 16) { 100 })
         val screen = paste(gradient, flat, 90, 60)
-        val result = TemplateMatcher.findBest(screen, flat, null, 0.95f)
-        assertNotNull(result)
-        assertEquals(90, result!!.left)
-        assertEquals(60, result.top)
-        assertTrue("score ${result.score}", result.score > 0.99f)
+        val outcome = TemplateMatcher.search(screen, flat, null)
+        assertEquals(Confidence.NO_CONTRAST, outcome.confidence)
+        assertNull(outcome.best)
+        assertNull(TemplateMatcher.findBest(screen, flat, null, 0f))
+    }
+
+    @Test
+    fun `a fade is matched at its true position, not the brightest patch`() {
+        // The image fades in over a flat background: window = alpha * template + (1-alpha) * bg.
+        // That is an affine change of the template, so ZNCC is invariant to it and the peak
+        // stays on the image — which is the whole reason an image that fades can be clicked.
+        val background = 90
+        val pattern = GrayImage(40, 30, IntArray(40 * 30) { i ->
+            val x = i % 40
+            val y = i / 40
+            (30 + (x * 5) % 140 + ((y / 3) * 9) % 60).coerceIn(0, 255)
+        })
+        val screen = GrayImage(200, 150, IntArray(200 * 150) { background })
+        for (alpha in listOf(1.0f, 0.6f, 0.3f)) {
+            val faded = paste(screen, pattern, 60, 40) { v ->
+                (v * alpha + background * (1f - alpha)).toInt().coerceIn(0, 255)
+            }
+            val result = TemplateMatcher.findBest(faded, pattern, null, 0.9f)
+            assertNotNull("fade alpha=$alpha", result)
+            assertEquals("fade alpha=$alpha", 60, result!!.left)
+            assertEquals("fade alpha=$alpha", 40, result.top)
+            assertTrue("fade alpha=$alpha score ${result.score}", result.score > 0.9f)
+        }
+    }
+
+    @Test
+    fun `a tie between mediocre candidates is not reported as a location`() {
+        // Stripes repeat every 20px, so every stripe window fits the (unrelated, low-contrast)
+        // template equally well. Nothing here is the image, and the search must say so rather
+        // than hand back whichever candidate happened to be first: that is a highlight drawn
+        // where the image is not, which is worse than not finding it.
+        val width = 200
+        val height = 150
+        val stripes = GrayImage(width, height, IntArray(width * height) { i ->
+            if ((i % width / 10) % 2 == 0) 0 else 20
+        })
+        val texture = GrayImage(20, 20, IntArray(20 * 20) { i -> 100 + (i % 7) * 2 })
+        val outcome = TemplateMatcher.search(stripes, texture, null)
+        assertNotNull("expected a best-effort candidate", outcome.best)
+        assertTrue("score ${outcome.best!!.score}", outcome.best!!.score < 0.95f)
+        assertEquals(outcome.best!!.score, outcome.runnerUp, 0.001f)
+        assertEquals(Confidence.AMBIGUOUS, outcome.confidence)
+        assertNull(TemplateMatcher.findBest(stripes, texture, null, 0f))
     }
 
     @Test
@@ -173,6 +219,22 @@ class TemplateMatcherTest {
         assertNotNull(result)
         assertEquals(left, result!!.left)
         assertEquals(top, result.top)
+    }
+
+    @Test
+    fun `a large template on an off-grid position still refines to the exact pixel`() {
+        // 80px is over the quarter-resolution threshold, so the coarse pass can only land on a
+        // multiple of 4: the refine window has to cover the bias, or an image would be reported
+        // up to three pixels away from where it is.
+        val screen = noiseImage(400, 300, seed = 21)
+        val left = 173
+        val top = 121
+        val template = patch(screen, left, top, 80, 80)
+        val result = TemplateMatcher.findBest(screen, template, null, 0.9f)
+        assertNotNull(result)
+        assertEquals(left, result!!.left)
+        assertEquals(top, result.top)
+        assertTrue("score ${result.score}", result.score > 0.99f)
     }
 
     @Test

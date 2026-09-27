@@ -11,7 +11,9 @@ import com.screenclicker.model.Rule
 import com.screenclicker.model.Script
 import com.screenclicker.store.SettingsRepo
 import com.screenclicker.vision.GrayImage
+import com.screenclicker.vision.Confidence
 import com.screenclicker.vision.MatchResult
+import com.screenclicker.vision.SearchOutcome
 import com.screenclicker.vision.TemplateMatcher
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -164,16 +166,18 @@ class ScriptRunner(
                         "'${rule.name}': region ${region.width}x${region.height} at " +
                             "(${region.left},${region.top}), template ${template.width}x" +
                             "${template.height}, align (${rule.alignX},${rule.alignY}), " +
+                            "highlight offset " +
+                            "(${rule.tapAlignX - rule.alignX},${rule.tapAlignY - rule.alignY}), " +
                             "drawn at (${rule.searchRegion.left},${rule.searchRegion.top})",
                     )
                 }
             }
             val union = regions.values.reduceOrNull { a, b -> a.union(b) }
             val matches = HashMap<String, MatchResult>()
-            // Best score per rule regardless of the threshold: without it a status line can
-            // only say "nothing", which cannot distinguish a weak match from a region placed
-            // in the wrong space.
-            val bestScores = LinkedHashMap<String, Float>()
+            // Every rule's search this frame, kept whole: a bare score cannot tell a find from a
+            // tie between two bland patches, and that distinction is what decides whether a
+            // highlight is drawn and where a tap goes.
+            val outcomes = LinkedHashMap<String, SearchOutcome>()
             var grayMs = 0L
             var matchMs = 0L
             if (union != null) {
@@ -194,18 +198,20 @@ class ScriptRunner(
                         region.bottom - union.top,
                     )
                     val matchStarted = System.currentTimeMillis()
-                    // Threshold 0 (the filter is applied below): the scan itself is identical,
-                    // so this reports the score that was always being computed.
-                    val best = TemplateMatcher.findBest(scan, template, local, 0f)
+                    // No threshold here: the scan is identical either way, so this reports the
+                    // score that was always being computed and the rule's own threshold is
+                    // applied below.
+                    val outcome = TemplateMatcher.search(scan, template, local)
                     matchMs += System.currentTimeMillis() - matchStarted
-                    if (best != null) {
-                        bestScores[rule.id] = best.score
-                        if (best.score >= rule.threshold) {
-                            matches[rule.id] = best.copy(
-                                left = best.left + union.left,
-                                top = best.top + union.top,
-                            )
-                        }
+                    outcomes[rule.id] = outcome
+                    val best = outcome.best
+                    if (best != null && outcome.confidence == Confidence.SHARP &&
+                        best.score >= rule.threshold
+                    ) {
+                        matches[rule.id] = best.copy(
+                            left = best.left + union.left,
+                            top = best.top + union.top,
+                        )
                     }
                 }
             }
@@ -215,11 +221,12 @@ class ScriptRunner(
                 lastStatsAt = SystemClock.elapsedRealtime()
                 val scanMs = captureMs + grayMs + matchMs
                 onEvent(
-                    "scan ${scanMs}ms — capture $captureMs, gray $grayMs, match $matchMs " +
+                    "scan ${scanMs}ms — capture $captureMs, gray $grayMs, match $matchMs, " +
+                        "cadence ${settings.scanIntervalMs}ms " +
                         "(frame ${frame.width}x${frame.height}, " +
                         (union?.let { "region ${it.width}x${it.height}" } ?: "no search region") +
                         ")" +
-                        logScores(bestScores, rulesById),
+                        logOutcomes(outcomes, rulesById),
                 )
             }
 
@@ -312,11 +319,32 @@ class ScriptRunner(
         }
     }
 
-    /** " name 87%" per rule, in rule order; ids keep same-named rules from collapsing. */
-    private fun logScores(scores: Map<String, Float>, rules: Map<String, Rule>): String =
-        scores.entries.joinToString("") { (ruleId, score) ->
-            " ${rules[ruleId]?.name ?: ruleId} ${(score * 100).toInt()}%"
+    /**
+     * " name 87%" per rule, in rule order; ids keep same-named rules from collapsing.
+     *
+     * A score that could not be acted on says why instead of showing a number that looks like
+     * a find: a template with nothing in it, a frame where nothing scored, or two candidates so
+     * close that which one is *the* image cannot be told. The last case is what a highlight
+     * drawn beside the image instead of on it looks like, and it is not a threshold problem.
+     */
+    private fun logOutcomes(
+        outcomes: Map<String, SearchOutcome>,
+        rules: Map<String, Rule>,
+    ): String = outcomes.entries.joinToString("") { (ruleId, outcome) ->
+        val name = rules[ruleId]?.name ?: ruleId
+        val best = outcome.best
+        val second = outcome.runnerUp
+        when {
+            outcome.confidence == Confidence.NO_CONTRAST -> " $name: template has no contrast"
+            best == null -> " $name: nothing found"
+            outcome.confidence == Confidence.AMBIGUOUS ->
+                " $name ${percent(best.score)} (2nd ${percent(second)}, ambiguous)"
+            second >= best.score - 0.10f -> " $name ${percent(best.score)} (2nd ${percent(second)})"
+            else -> " $name ${percent(best.score)}"
         }
+    }
+
+    private fun percent(score: Float): String = "${(score * 100).toInt()}%"
 
     /** Same rect in the other coordinate space; a no-op where the spaces coincide. */
     private fun MatchResult.translated(dx: Int, dy: Int): MatchResult =
