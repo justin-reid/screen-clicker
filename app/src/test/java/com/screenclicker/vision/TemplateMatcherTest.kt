@@ -5,7 +5,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertFalse
 import org.junit.Test
+import kotlin.math.sin
 import kotlin.random.Random
 
 class TemplateMatcherTest {
@@ -37,6 +39,24 @@ class TemplateMatcherTest {
             }
         }
         return GrayImage(screen.width, screen.height, out)
+    }
+
+    /** alpha-blends [template] over a copy of [background] at (left, top). */
+    private fun blend(
+        background: GrayImage,
+        template: GrayImage,
+        left: Int,
+        top: Int,
+        alpha: Float,
+    ): GrayImage {
+        val out = background.pixels.copyOf()
+        for (y in 0 until template.height) {
+            for (x in 0 until template.width) {
+                val idx = (top + y) * background.width + (left + x)
+                out[idx] = (alpha * template[x, y] + (1f - alpha) * out[idx]).toInt().coerceIn(0, 255)
+            }
+        }
+        return GrayImage(background.width, background.height, out)
     }
 
     private fun gradientScreen(width: Int, height: Int): GrayImage {
@@ -163,6 +183,41 @@ class TemplateMatcherTest {
             assertEquals("fade alpha=$alpha", 40, result.top)
             assertTrue("fade alpha=$alpha score ${result.score}", result.score > 0.9f)
         }
+    }
+
+    @Test
+    fun `a fade over a structured background is still found`() {
+        // Over a background with structure of its own, alpha*template + (1-alpha)*background
+        // is no longer an affine change of the template, so plain ZNCC degrades exactly as
+        // the image gets fainter: the hill-shaped background correlates with nothing in the
+        // template but still owns most of the window's variance. The high-pass pass exists
+        // for this — it erases the slow background and keeps the target's edges, scaled by
+        // whatever fraction of the fade has happened so far.
+        val width = 300
+        val height = 220
+        val background = GrayImage(width, height, IntArray(width * height) { i ->
+            val x = i % width
+            val y = i / width
+            (128 + 60 * sin(x / 17.0) * sin(y / 23.0)).toInt().coerceIn(0, 255)
+        })
+        val pattern = GrayImage(40, 30, IntArray(40 * 30) { i ->
+            val x = i % 40
+            val y = i / 40
+            (30 + (x * 5) % 140 + ((y / 3) * 9) % 60).coerceIn(0, 255)
+        })
+        var unfaded: MatchResult? = null
+        for (alpha in listOf(1.0f, 0.5f, 0.25f)) {
+            val faded = blend(background, pattern, 60, 40, alpha)
+            val result = TemplateMatcher.findBest(faded, pattern, null, 0.9f)
+            assertNotNull("fade alpha=$alpha", result)
+            assertEquals("fade alpha=$alpha", 60, result!!.left)
+            assertEquals("fade alpha=$alpha", 40, result.top)
+            assertTrue("fade alpha=$alpha score ${result.score}", result.score > 0.9f)
+            if (alpha == 1.0f) unfaded = result
+        }
+        // The unfaded control is decided by the plain pass; the flag exists so the on-device
+        // log can say which evidence carried a find.
+        assertFalse(unfaded!!.viaHighPass)
     }
 
     @Test

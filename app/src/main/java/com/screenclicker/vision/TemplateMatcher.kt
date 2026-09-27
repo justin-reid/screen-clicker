@@ -4,6 +4,7 @@ import com.screenclicker.model.PxRect
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 data class MatchResult(
@@ -12,6 +13,8 @@ data class MatchResult(
     val top: Int,
     val width: Int,
     val height: Int,
+    /** True when the winning score came from the high-pass pass — see [TemplateMatcher]. */
+    val viaHighPass: Boolean = false,
 ) {
     val centerX: Int get() = left + width / 2
     val centerY: Int get() = top + height / 2
@@ -95,6 +98,18 @@ data class SearchOutcome(
  *    as ambiguous instead of as a find, because "which of these two spots" is not a question
  *    the caller can answer.
  *
+ * Fades need a second body of evidence. Alpha-blending the image with a *flat* background
+ * is an affine change of the template and plain ZNCC is invariant to it; alpha-blending with
+ * a background that has structure of its own is not — the observed window is
+ * alpha*template + (1-alpha)*background, and the background term degrades the score exactly
+ * as the image gets fainter (which is the moment a fade has to be caught). So the coarse
+ * ranking runs twice, on the raw screen and on its *high-pass filtered* copy — each pixel
+ * minus the mean of its [HIGH_PASS_RADIUS]-neighbourhood, which erases the smooth background
+ * and keeps the target's own edges, scaled by alpha — and at full resolution the surviving
+ * windows are re-scored the same way whenever the plain pass was not confident. A position
+ * keeps whichever evidence scores higher, and the result remembers which pass won
+ * ([MatchResult.viaHighPass]) so the on-device log can say what carried the find.
+ *
  * Pure Kotlin (IntArray, no Android types) — JVM-testable.
  */
 object TemplateMatcher {
@@ -136,8 +151,22 @@ object TemplateMatcher {
      */
     private const val MAX_COARSE_FACTOR = 8
 
-    /** Coarse winners refined at full resolution. The extras feed the ambiguity check. */
-    private const val COARSE_CANDIDATES = 4
+    /**
+     * Coarse winners refined at full resolution; the extras feed the ambiguity check.
+     *
+     * More than a handful because a *faded* target is exactly the one the coarse ranking
+     * buries: its box-filtered contrast is a fraction of the template's, and a coarse decoy
+     * can outscore it. Refining an extra window costs one small scan, which is cheap; a
+     * buried target costs the whole find.
+     */
+    private const val COARSE_CANDIDATES = 12
+
+    /**
+     * Radius of the box mean the high-pass pass subtracts (a 9x9 neighbourhood). Small
+     * enough to keep every edge the template can be located by, large enough to erase the
+     * smooth shading a fade is blended against.
+     */
+    private const val HIGH_PASS_RADIUS = 4
 
     /** A template whose contrast is below this (gray levels) cannot say *where* anything is. */
     private const val MIN_TEMPLATE_STD = 2.0
@@ -224,29 +253,73 @@ object TemplateMatcher {
         val refined = Candidates(limit = 2, separation = separation)
 
         val factor = coarseFactor(template, relXMax, relYMax)
-        if (factor == 0) {
+        val edge = edgePass(screen, template, bounds, factor)
+
+        // The windows full-resolution scoring happens in: the whole candidate range for a
+        // small template, one small neighbourhood per coarse winner otherwise. The coarse
+        // ranking itself runs twice — on the raw screen and on its high-passed copy: a faded
+        // target's coarse contrast is a fraction of the template's while the background's is
+        // undiminished, so the raw ranking can bury the true position under decoys exactly
+        // when the image is faintest; high-passed, the background washes out and the
+        // target's edges still lead. Seeds from both are merged and refined together.
+        val windows: List<RelWindow> = if (factor == 0) {
             // Too small to survive a box filter: exhaustive full-resolution scan. Cheap,
             // because a tiny template has few pixels per candidate position.
-            val integrals = Integrals(screen, bounds)
-            scan(
-                screen, template, bounds, integrals, refined,
-                0, 0, relXMax, relYMax, stride = 1, windowVarFloor, tStats,
-            )
+            listOf(RelWindow(0, 0, relXMax, relYMax))
         } else {
-            val seeds = coarseSeeds(screen, template, bounds, relXMax, relYMax, factor, separation)
-            val integrals = Integrals(screen, bounds)
+            val seeds = Candidates(limit = COARSE_CANDIDATES, separation = separation)
+            coarseSeeds(
+                screen, template, 0, 0, bounds, relXMax, relYMax, factor, separation,
+            ).forEach(seeds::offer)
+            edge?.let {
+                coarseSeeds(
+                    it.screen, it.template, it.offsetX, it.offsetY,
+                    bounds, relXMax, relYMax, factor, separation,
+                ).forEach(seeds::offer)
+            }
             val radius = refineRadius(factor)
-            for (seed in seeds) {
+            seeds.items.map { seed ->
                 val approxRelX = (seed.left - bounds.left).coerceIn(0, relXMax)
                 val approxRelY = (seed.top - bounds.top).coerceIn(0, relYMax)
-                scan(
-                    screen, template, bounds, integrals, refined,
+                RelWindow(
                     max(0, approxRelX - radius),
                     max(0, approxRelY - radius),
                     min(relXMax, approxRelX + radius),
                     min(relYMax, approxRelY + radius),
-                    stride = 1, windowVarFloor, tStats,
                 )
+            }
+        }
+
+        val integrals = Integrals(screen, bounds)
+        for (w in windows) {
+            scan(
+                screen, template, bounds, integrals, refined, w,
+                stride = 1, windowVarFloor, tStats,
+            )
+        }
+
+        // Plain ZNCC is confident about an unfaded target, so the second pass only re-scores
+        // the same windows when the first left doubt: a faint find, an ambiguous one, or
+        // nothing at all.
+        val rawBest = refined.best
+        if (rawBest == null || rawBest.score < CONFIDENT_SCORE) {
+            edge?.let {
+                // The hp refine scores the template's interior, whose top-left sits [r]
+                // pixels in from the window's; shifting the window by +r and the offer back
+                // by −r keeps the reported rectangle the full template's.
+                val r = HIGH_PASS_RADIUS
+                for (w in windows) {
+                    scan(
+                        it.screen, it.refineTemplate, it.bounds, it.integrals, refined,
+                        RelWindow(w.relXMin + r, w.relYMin + r, w.relXMax + r, w.relYMax + r),
+                        stride = 1, it.windowVarFloor, it.templateStats,
+                        viaHighPass = true,
+                        offerOffsetX = it.offsetX - r,
+                        offerOffsetY = it.offsetY - r,
+                        offerWidth = it.template.width,
+                        offerHeight = it.template.height,
+                    )
+                }
             }
         }
 
@@ -263,6 +336,110 @@ object TemplateMatcher {
 
     private fun notFound() =
         SearchOutcome(null, SearchOutcome.NO_RUNNER_UP, Confidence.NONE)
+
+    /**
+     * The high-pass body of evidence: the screen cropped to [bounds] plus the filter radius
+     * of margin, and the template, both run through [highPass]; the search region in the
+     * cropped screen's coordinates; and the template stats the contrast floor needs. Null
+     * when the template has no edge structure to score (its variance is all slower than the
+     * filter radius), in which case the plain pass already said everything there is.
+     */
+    private fun edgePass(
+        screen: GrayImage,
+        template: GrayImage,
+        bounds: PxRect,
+        factor: Int,
+    ): EdgePass? {
+        val r = HIGH_PASS_RADIUS
+        // The crop's origin is aligned to the coarse grid (where there is one) so the
+        // high-passed copy ranks positions on the same lattice the raw screen does.
+        val f = if (factor >= 2) factor else 1
+        val exLeft = max(0, (bounds.left - r) / f * f)
+        val exTop = max(0, (bounds.top - r) / f * f)
+        val exRight = min(screen.width, (bounds.right + r + f - 1) / f * f)
+        val exBottom = min(screen.height, (bounds.bottom + r + f - 1) / f * f)
+        val hpScreen = highPass(screen, PxRect(exLeft, exTop, exRight, exBottom))
+        val hpTemplate = highPass(template, PxRect(0, 0, template.width, template.height))
+        // Full-resolution scoring uses the template's interior only: a high-passed pixel is
+        // only exact where its whole filter neighbourhood lies inside its image, and the
+        // screen side has real neighbours outside the template while the template side would
+        // have to fake them — that border ring is a large fraction of a small template's
+        // pixels and consistently disagrees, dragging every hp score down (a faded target
+        // with it). Cropped on both sides, interior hp values agree exactly.
+        val tw = template.width
+        val th = template.height
+        if (tw <= 2 * r || th <= 2 * r) return null
+        val refineTemplate = GrayImage(
+            tw - 2 * r,
+            th - 2 * r,
+            IntArray((tw - 2 * r) * (th - 2 * r)) { i ->
+                val x = r + i % (tw - 2 * r)
+                val y = r + i / (tw - 2 * r)
+                hpTemplate[x, y]
+            },
+        )
+        val templateStats = stats(refineTemplate)
+        if (sqrt(templateStats.varPerPx) < MIN_TEMPLATE_STD) return null
+        return EdgePass(
+            screen = hpScreen,
+            template = hpTemplate,
+            refineTemplate = refineTemplate,
+            bounds = PxRect(
+                bounds.left - exLeft,
+                bounds.top - exTop,
+                bounds.right - exLeft,
+                bounds.bottom - exTop,
+            ),
+            integrals = Integrals(hpScreen, PxRect(0, 0, hpScreen.width, hpScreen.height)),
+            templateStats = templateStats,
+            // Same floor the plain pass uses: the high-pass image has its own quantisation
+            // noise (the rounded difference), about a gray level's worth, and a window under
+            // it is flat background, however well the noise happens to correlate. Per pixel,
+            // like the plain pass — [scan] scales it back up by the window's pixel count.
+            windowVarFloor = max(MIN_WINDOW_VAR, CONTRAST_FRACTION * templateStats.varPerPx),
+            offsetX = exLeft,
+            offsetY = exTop,
+        )
+    }
+
+    /**
+     * Each pixel of [img] inside [area] minus the mean of its [HIGH_PASS_RADIUS]
+     * -neighbourhood, as a new image whose (0, 0) is [area]'s top-left. Windows that would
+     * reach past the area's edge use the clipped neighbourhood: it shifts scores a little
+     * and never the ranking, because every candidate is scored against the same filtered
+     * template, and the search region proper is inset by the full radius anyway.
+     */
+    private fun highPass(img: GrayImage, area: PxRect): GrayImage {
+        val r = HIGH_PASS_RADIUS
+        val integrals = Integrals(img, area)
+        val out = IntArray(area.width * area.height)
+        for (y in 0 until area.height) {
+            for (x in 0 until area.width) {
+                val wxMin = max(0, x - r)
+                val wyMin = max(0, y - r)
+                val wxMax = min(area.width, x + r + 1)
+                val wyMax = min(area.height, y + r + 1)
+                val count = (wxMax - wxMin) * (wyMax - wyMin)
+                val mean =
+                    integrals.areaSum(wxMin, wyMin, wxMax - wxMin, wyMax - wyMin).toDouble() / count
+                out[y * area.width + x] = (img[area.left + x, area.top + y] - mean).roundToInt()
+            }
+        }
+        return GrayImage(area.width, area.height, out)
+    }
+
+    /** Everything the high-pass scan needs; coordinates are relative to [screen]. */
+    private class EdgePass(
+        val screen: GrayImage,
+        val template: GrayImage,
+        val refineTemplate: GrayImage,
+        val bounds: PxRect,
+        val integrals: Integrals,
+        val templateStats: Stats,
+        val windowVarFloor: Double,
+        val offsetX: Int,
+        val offsetY: Int,
+    )
 
     /**
      * Coarse pyramid factor for this template and candidate range, or 0 to scan at full
@@ -301,12 +478,22 @@ object TemplateMatcher {
     private fun coarseSeeds(
         screen: GrayImage,
         template: GrayImage,
+        originX: Int,
+        originY: Int,
         bounds: PxRect,
         relXMax: Int,
         relYMax: Int,
         factor: Int,
         separation: Int,
     ): List<MatchResult> {
+        // [screen] may be a crop of the real one (the high-passed copy), so everything here
+        // works in its coordinates and maps finds back through the crop's origin.
+        val localBounds = PxRect(
+            bounds.left - originX,
+            bounds.top - originY,
+            bounds.right - originX,
+            bounds.bottom - originY,
+        )
         val coarseScreen = downsample(screen, factor, 0, 0)
         val coarseBounds = PxRect(0, 0, coarseScreen.width, coarseScreen.height)
         val coarseIntegrals = Integrals(coarseScreen, coarseBounds)
@@ -323,15 +510,15 @@ object TemplateMatcher {
                 // Full-res top-left X = factor * cx - phaseX must satisfy
                 // bounds.left <= X <= bounds.left + relXMax, and the window must fit inside
                 // the coarse image.
-                val cxMin = max(0, ceilDiv(bounds.left + phaseX, factor))
+                val cxMin = max(0, ceilDiv(localBounds.left + phaseX, factor))
                 val cxMax = min(
                     coarseScreen.width - coarseTemplate.width,
-                    floorDiv(bounds.left + relXMax + phaseX, factor),
+                    floorDiv(localBounds.left + relXMax + phaseX, factor),
                 )
-                val cyMin = max(0, ceilDiv(bounds.top + phaseY, factor))
+                val cyMin = max(0, ceilDiv(localBounds.top + phaseY, factor))
                 val cyMax = min(
                     coarseScreen.height - coarseTemplate.height,
-                    floorDiv(bounds.top + relYMax + phaseY, factor),
+                    floorDiv(localBounds.top + relYMax + phaseY, factor),
                 )
                 if (cxMin > cxMax || cyMin > cyMax) continue
 
@@ -343,7 +530,7 @@ object TemplateMatcher {
                 )
                 scan(
                     coarseScreen, coarseTemplate, coarseBounds, coarseIntegrals, phaseSeeds,
-                    cxMin, cyMin, cxMax, cyMax, stride = 1,
+                    RelWindow(cxMin, cyMin, cxMax, cyMax), stride = 1,
                     windowVarFloor = -1.0, // no floor at this scale (see above)
                     templateStats = stats(coarseTemplate),
                 )
@@ -351,8 +538,8 @@ object TemplateMatcher {
                     seeds.offer(
                         MatchResult(
                             seed.score,
-                            seed.left * factor - phaseX,
-                            seed.top * factor - phaseY,
+                            seed.left * factor - phaseX + originX,
+                            seed.top * factor - phaseY + originY,
                             template.width,
                             template.height,
                         ),
@@ -389,10 +576,19 @@ object TemplateMatcher {
         return GrayImage(w, h, out)
     }
 
+    /** Inclusive candidate-position range, relative to the search bounds' origin. */
+    private data class RelWindow(
+        val relXMin: Int,
+        val relYMin: Int,
+        val relXMax: Int,
+        val relYMax: Int,
+    )
+
     /**
-     * ZNCC over candidate top-left positions. (relXMin, relYMin)..(relXMax, relYMax) are
-     * inclusive and relative to [bounds]'s origin; offered coordinates are in the image space
-     * of [screen]. A window is offered only when it carries enough contrast of its own.
+     * ZNCC over candidate top-left positions. [window] is inclusive and relative to
+     * [bounds]'s origin; offered coordinates are in the image space of [screen], shifted by
+     * the offer offsets (the high-pass pass scores a cropped copy of the screen and maps its
+     * finds back). A window is offered only when it carries enough contrast of its own.
      */
     private fun scan(
         screen: GrayImage,
@@ -400,14 +596,20 @@ object TemplateMatcher {
         bounds: PxRect,
         integrals: Integrals,
         candidates: Candidates,
-        relXMin: Int,
-        relYMin: Int,
-        relXMax: Int,
-        relYMax: Int,
+        window: RelWindow,
         stride: Int,
         windowVarFloor: Double,
         templateStats: Stats,
+        viaHighPass: Boolean = false,
+        offerOffsetX: Int = 0,
+        offerOffsetY: Int = 0,
+        offerWidth: Int = -1,
+        offerHeight: Int = -1,
     ) {
+        val relXMin = window.relXMin
+        val relYMin = window.relYMin
+        val relXMax = window.relXMax
+        val relYMax = window.relYMax
         if (relXMin > relXMax || relYMin > relYMax) return
 
         val sw = screen.width
@@ -445,7 +647,14 @@ object TemplateMatcher {
                     if (den > 0.0) {
                         val score = (num / den).toFloat().coerceIn(0f, 1f)
                         candidates.offer(
-                            MatchResult(score, bounds.left + rx, bounds.top + ry, tw, th),
+                            MatchResult(
+                                score,
+                                bounds.left + rx + offerOffsetX,
+                                bounds.top + ry + offerOffsetY,
+                                if (offerWidth >= 0) offerWidth else tw,
+                                if (offerHeight >= 0) offerHeight else th,
+                                viaHighPass,
+                            ),
                         )
                     }
                 }

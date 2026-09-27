@@ -334,13 +334,16 @@ class ScriptRunner(
         val name = rules[ruleId]?.name ?: ruleId
         val best = outcome.best
         val second = outcome.runnerUp
+        // Which evidence carried the find: "edge" means the high-pass pass won, which is
+        // what a target mid-fade looks like — worth knowing before touching the threshold.
+        val via = if (best?.viaHighPass == true) " (edge)" else ""
         when {
             outcome.confidence == Confidence.NO_CONTRAST -> " $name: template has no contrast"
             best == null -> " $name: nothing found"
             outcome.confidence == Confidence.AMBIGUOUS ->
-                " $name ${percent(best.score)} (2nd ${percent(second)}, ambiguous)"
-            second >= best.score - 0.10f -> " $name ${percent(best.score)} (2nd ${percent(second)})"
-            else -> " $name ${percent(best.score)}"
+                " $name ${percent(best.score)} (2nd ${percent(second)}, ambiguous)$via"
+            second >= best.score - 0.10f -> " $name ${percent(best.score)} (2nd ${percent(second)})$via"
+            else -> " $name ${percent(best.score)}$via"
         }
     }
 

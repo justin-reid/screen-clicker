@@ -1,6 +1,7 @@
 package com.screenclicker.vision
 
 import com.screenclicker.model.PxRect
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -54,5 +55,40 @@ class TemplateMatcherBenchmarkTest {
             // vary) but far below the 2.9s this used to take on the device.
             assertTrue("match took ${ms}ms", ms < 400)
         }
+    }
+
+    @Test
+    fun `a faded target over the same region costs the second evidence pass and stays in budget`() {
+        // Mid-fade the plain pass is not confident, so the high-pass pass runs at both the
+        // coarse and the refine stage; this is the worst case per scan and the one that has
+        // to fit the cadence. The template is cut from one screen and faded over a *different*
+        // one: blending a template with the very pixels it was cropped from is no fade at all.
+        val width = 1080
+        val height = 2520
+        val region = PxRect(0, 1000, 1080, 1533)
+        val source = noisyScreen(width, height, seed = 43)
+        val background = noisyScreen(width, height, seed = 44)
+        val template = patch(source, 300, 1200, 120, 120)
+
+        val fadedPx = background.pixels.copyOf()
+        val alpha = 0.3f
+        for (y in 0 until 120) {
+            for (x in 0 until 120) {
+                val idx = (1200 + y) * width + (300 + x)
+                fadedPx[idx] = (alpha * template[x, y] + (1f - alpha) * background[x + 300, y + 1200])
+                    .toInt().coerceIn(0, 255)
+            }
+        }
+        val faded = GrayImage(width, height, fadedPx)
+
+        TemplateMatcher.findBest(faded, template, region, 0f) // JIT warm-up
+        val start = System.nanoTime()
+        val result = TemplateMatcher.findBest(faded, template, region, 0.9f)
+        val ms = (System.nanoTime() - start) / 1_000_000
+        println("faded template=120x120 match=${ms}ms score=${result?.score} edge=${result?.viaHighPass}")
+        assertNotNull(result)
+        assertEquals(300, result!!.left)
+        assertEquals(1200, result.top)
+        assertTrue("match took ${ms}ms", ms < 400)
     }
 }
