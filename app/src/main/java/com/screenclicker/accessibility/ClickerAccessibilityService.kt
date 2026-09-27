@@ -94,6 +94,10 @@ class ClickerAccessibilityService : AccessibilityService() {
         suspend fun tap(x: Float, y: Float): Boolean =
             instance?.tap(x, y) ?: false
 
+        /** Opens the system Recents — how the rule editor lets the user switch apps. */
+        fun goRecents(): Boolean =
+            instance?.performGlobalAction(GLOBAL_ACTION_RECENTS) ?: false
+
         /**
          * Starts running the script with [scriptId]. Returns false when the
          * accessibility service is not enabled (nothing can run without it).

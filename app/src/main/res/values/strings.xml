@@ -16,12 +16,14 @@
     <string name="capture_notification_text">Screen capture is active</string>
     <string name="capture_stop">Stop</string>
 
+    <string name="overlay_editor_title">Rule editor — drag by this bar</string>
     <string name="overlay_role_search">Search area</string>
     <string name="overlay_role_template">Capture area</string>
     <string name="overlay_role_click">Click area</string>
-    <string name="overlay_capture">Capture template</string>
-    <string name="overlay_check">Check match</string>
+    <string name="overlay_capture">Capture</string>
+    <string name="overlay_check">Check</string>
+    <string name="overlay_recents">Switch app</string>
     <string name="overlay_save">Save</string>
     <string name="overlay_cancel">Cancel</string>
-    <string name="overlay_status_hint">Drag the highlighted box; pick which box with the buttons above.</string>
+    <string name="overlay_pick_app_hint">Pick your target app from Recents — the editor stays on screen.</string>
 </resources>
