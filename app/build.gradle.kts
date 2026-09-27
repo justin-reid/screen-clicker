@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
 }
 
 // Without this the APK is named after the Gradle module, i.e. app-debug.apk. AGP builds
@@ -71,6 +72,7 @@ kotlin {
 dependencies {
     testImplementation(libs.junit4)
 
+    implementation(libs.kotlinx.serialization.json)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
 
