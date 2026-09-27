@@ -86,12 +86,23 @@ app/
   `app/build.gradle.kts` points the debug `signingConfig` at that file **explicitly**.
   This matters: without it, Android refuses updates over an installed copy and reports
   only "App not installed". Print and compare the certificate fingerprint each build.
+  It should stay:
+
+  ```
+  084f281aea337ea94e75e0cf703f78ed3d5f6abebe8b404409a1feb7b2a496d0
+  ```
+
+- AGP 8.13.2 defaults to **build-tools 35.0.0** even with compileSdk 36; it tries to
+  auto-install it on first use and dies on the SDK license prompt. On Justin-PC the SDK
+  was populated by downloading packages directly from dl.google.com (see
+  `C:\Users\justi\tools\install-sdk-direct.ps1`), which sidesteps license handling
+  entirely: build-tools 35.0.0, 36.0.0, 36.1.0, platform-36, platform-tools.
 
 ## Status
 
 | # | Milestone | State |
 |---|---|---|
-| M0 | Scaffold + CI producing a debug APK artifact | in progress |
+| M0 | Scaffold + CI producing a debug APK artifact | done, verified green 2026-09-27 |
 | M1 | Accessibility service shell (screenshot, tap test) | pending |
 | M2 | Template matcher + JVM unit tests | pending |
 | M3 | Data model + persistence + script editor | pending |
