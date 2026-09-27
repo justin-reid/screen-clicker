@@ -1,4 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Screen Clicker</string>
+
+    <string name="accessibility_service_label">Screen Clicker</string>
+    <string name="accessibility_service_description">Watches the screen for images you
+        choose and taps for you. Captures the screen and performs taps only while a
+        script you configured is running.</string>
 </resources>
