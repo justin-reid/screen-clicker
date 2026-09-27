@@ -132,24 +132,37 @@ fun RuleEditorScreen(
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
             val target = editing
-            val decoded = withContext(Dispatchers.IO) {
-                decodeTemplateImage(context, uri, target.searchRegion)
+            // A revoked picker grant or a full disk throws in here, and nothing above this
+            // coroutine catches: the process would die. Report it on the card instead.
+            val outcome = runCatching {
+                val decoded = withContext(Dispatchers.IO) {
+                    decodeTemplateImage(context, uri, target.searchRegion)
+                } ?: return@runCatching null
+                val name = withContext(Dispatchers.IO) {
+                    store.saveTemplateFromBitmap(target.id, decoded)
+                }
+                name to decoded
             }
-            if (decoded == null) {
-                templateNote = "Could not read that image."
-                return@launch
-            }
-            val name = withContext(Dispatchers.IO) {
-                store.saveTemplateFromBitmap(target.id, decoded)
-            }
-            val updatedRule = target.copy(templateFile = name)
-            val updatedScript = current.withRule(updatedRule)
-            rule = updatedRule
-            script = updatedScript
-            // Persist now: the PNG already replaced this rule's fixed template path.
-            store.save(updatedScript)
-            templateNote = "Imported ${decoded.width} × ${decoded.height} px from gallery."
-            templateVersion++
+            outcome.fold(
+                onSuccess = { saved ->
+                    if (saved == null) {
+                        templateNote = "Could not read that image."
+                    } else {
+                        val (name, decoded) = saved
+                        val updatedRule = target.copy(templateFile = name)
+                        val updatedScript = current.withRule(updatedRule)
+                        rule = updatedRule
+                        script = updatedScript
+                        // Persist now: the PNG already replaced this rule's template path.
+                        store.save(updatedScript)
+                        templateNote = "Imported ${decoded.width} × ${decoded.height} px from gallery."
+                        templateVersion++
+                    }
+                },
+                onFailure = { error ->
+                    templateNote = "Import failed: ${error.message ?: error::class.simpleName}"
+                },
+            )
         }
     }
 

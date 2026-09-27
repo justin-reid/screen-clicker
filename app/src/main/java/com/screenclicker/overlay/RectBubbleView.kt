@@ -17,6 +17,9 @@ import kotlin.math.abs
  * rect, applies drag deltas (this view reports deltas, not positions — the window moves
  * in lockstep with the rect, so deltas stay valid mid-drag), resizes/repositions the
  * window, and calls back with the new size for painting.
+ *
+ * In [probeOnly] mode it paints just the alignment probe and none of the rectangle, because
+ * the rectangle's own outline, fill and label must never appear in a capture.
  */
 class RectBubbleView(
     context: Context,
@@ -82,6 +85,36 @@ class RectBubbleView(
     }
     private val handleRadius = 9f * density
 
+    /**
+     * Alignment probe: drawn instead of the rectangle while a screenshot is taken.
+     *
+     * The rect must not appear in the pixels being captured, but the probe marker has to —
+     * so during a capture the view paints only the marker, which sits in the handle margin
+     * (outside the cropped area). See [ProbeMarker].
+     */
+    private val probePaint = Paint().apply {
+        style = Paint.Style.FILL
+        isAntiAlias = false
+    }
+
+    /** True only for the instant of a capture; the service toggles it. */
+    var probeOnly: Boolean = false
+        set(value) {
+            field = value
+            invalidate()
+        }
+
+    /**
+     * Marker position inside this window, in window coordinates, computed by the service via
+     * [ProbeMarker.offsetInWindow] so the painted position and the position the service
+     * expects to find are the same number.
+     */
+    var probeOffset: Pair<Int, Int>? = null
+        set(value) {
+            field = value
+            invalidate()
+        }
+
     private var mode = Mode.NONE
 
     /** Raw screen coordinates — immune to the window moving under the finger mid-drag. */
@@ -93,6 +126,12 @@ class RectBubbleView(
     private var accY = 0f
 
     override fun onDraw(canvas: Canvas) {
+        if (probeOnly) {
+            // Null when the rectangle leaves no visible margin to hide a marker in.
+            val offset = probeOffset ?: return
+            ProbeMarker.draw(canvas, offset.first, offset.second, probePaint)
+            return
+        }
         val left = marginPx.toFloat()
         val top = marginPx.toFloat()
         val right = (marginPx + rectWidth).toFloat()

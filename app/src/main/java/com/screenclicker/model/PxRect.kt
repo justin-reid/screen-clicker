@@ -38,6 +38,13 @@ data class PxRect(
         return PxRect(l, t, maxOf(l, r), maxOf(t, b))
     }
 
+    /**
+     * Shifted by a measured alignment correction. Values may go negative; the consumer
+     * clamps against its own screen bounds.
+     */
+    fun translated(dx: Int, dy: Int): PxRect =
+        PxRect(left + dx, top + dy, right + dx, bottom + dy)
+
     /** Smallest rect containing both — used to convert one screen region once. */
     fun union(other: PxRect): PxRect = PxRect(
         minOf(left, other.left),

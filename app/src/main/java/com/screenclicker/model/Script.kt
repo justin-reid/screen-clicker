@@ -28,9 +28,9 @@ enum class Cadence {
 }
 
 /**
- * One detection-and-click rule: look for [templateFile] inside [searchRegion], and when
- * the match scores at least [threshold], tap (after [delayMs] ± [jitterMs]) either the
- * match or [clickRegion].
+ * One detection-and-click rule: look for [templateFile] inside [searchRegion] shifted by
+ * [alignX]/[alignY], and when the match scores at least [threshold], tap (after [delayMs]
+ * ± [jitterMs]) either the match or [clickRegion].
  */
 @Serializable
 data class Rule(
@@ -40,6 +40,34 @@ data class Rule(
     /** PNG file name (not path) inside the templates directory; null until captured. */
     val templateFile: String? = null,
     val searchRegion: PxRect = PxRect(0, 0, 0, 0),
+    /**
+     * Last on-screen capture box, so re-capturing a template starts from the same place.
+     * Editor-only state: the engine never reads it.
+     */
+    val templateRegion: PxRect? = null,
+    /**
+     * Alignment correction measured by the rule editor, applied to [searchRegion] and
+     * [clickRegion] when the engine uses them.
+     *
+     * Overlay window coordinates and screenshot coordinates do not always share an origin
+     * (see the overlay's ProbeMarker), so the regions the user draws live in the editor's
+     * model space and can sit a constant offset away from the same place in a screenshot.
+     * The editor measures that offset and records it here; zero means "no correction",
+     * which is the case on most devices.
+     */
+    val alignX: Int = 0,
+    val alignY: Int = 0,
+    /**
+     * The same correction measured in *display* coordinates, which is the space taps are
+     * injected in and detection highlights are drawn in — as opposed to [alignX]/[alignY],
+     * which are measured in the screenshot's coordinates and used for the search region.
+     *
+     * They are equal on any device where a screenshot is the display pixel for pixel. They
+     * differ when a screenshot is not the size of the display (foldables), and in that case
+     * a tap placed with [alignX] alone would land at the wrong place.
+     */
+    val tapAlignX: Int = 0,
+    val tapAlignY: Int = 0,
     /** Match score (0..1) required to trigger. */
     val threshold: Float = 0.90f,
     val clickMode: ClickMode = ClickMode.ON_IMAGE,

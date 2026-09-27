@@ -272,10 +272,15 @@ class ConfigToolbarView(
         }
     }
 
-    fun setActiveRole(role: RectBubbleView.Role) {
+    /**
+     * Highlights the area currently on screen. Null = none of them: the editor starts with
+     * no rectangle at all, and tapping the highlighted one hides it again.
+     */
+    fun setActiveRole(role: RectBubbleView.Role?) {
         for ((candidate, button) in roleButtons) {
             button.alpha = if (candidate == role) 1f else 0.45f
         }
+        if (role == null) setStatus(context.getString(com.screenclicker.R.string.overlay_no_area))
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()

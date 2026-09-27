@@ -102,7 +102,11 @@ class ScriptRunner(
             val regions = LinkedHashMap<String, PxRect>()
             for (rule in enabledRules) {
                 val template = templates[rule.id] ?: continue
-                val region = rule.searchRegion.clampedTo(frame.width, frame.height)
+                // The editor's measured alignment moves the drawn region onto the same
+                // place in a screenshot; zero on devices where they already agree.
+                val region = rule.searchRegion
+                    .translated(rule.alignX, rule.alignY)
+                    .clampedTo(frame.width, frame.height)
                 if (region.width < template.width || region.height < template.height) continue
                 regions[rule.id] = region
             }
@@ -199,17 +203,35 @@ class ScriptRunner(
         onEvent("Stopped")
     }
 
-    /** The bounds a tap may land in for this rule's hit. */
-    private fun clickBounds(rule: Rule, match: MatchResult): PxRect = when (rule.clickMode) {
-        ClickMode.ON_IMAGE ->
-            PxRect(match.left, match.top, match.left + match.width, match.top + match.height)
-
-        ClickMode.ON_REGION -> rule.clickRegion ?: PxRect(
+    /**
+     * The bounds a tap may land in for this rule's hit.
+     *
+     * Two coordinate spaces meet here. Matching runs in *screenshot* space, so the search
+     * region carries the editor's measured [Rule.alignX]. Taps are injected and highlights
+     * drawn in *display* space, whose correction is [Rule.tapAlignX]. On any device where a
+     * screenshot is the display pixel for pixel the two are equal; where they are not (a
+     * screenshot smaller than the display), using one for both would put every tap out by
+     * the difference.
+     */
+    private fun clickBounds(rule: Rule, match: MatchResult): PxRect {
+        val matchBounds = PxRect(
             match.left,
             match.top,
             match.left + match.width,
             match.top + match.height,
         )
+        val configured = rule.clickRegion
+        return when {
+            // A match is in screenshot space: bring it into display space for the gesture.
+            rule.clickMode != ClickMode.ON_REGION || configured == null ||
+                configured.width <= 0 || configured.height <= 0 -> matchBounds.translated(
+                rule.tapAlignX - rule.alignX,
+                rule.tapAlignY - rule.alignY,
+            )
+
+            // A configured region is in the editor's model space, like the search region.
+            else -> configured.translated(rule.tapAlignX, rule.tapAlignY)
+        }
     }
 
     /** Throttles the periodic "where did the scan budget go" status lines. */
