@@ -72,6 +72,10 @@ class ScriptRunner(
         }
 
         onEvent("Running ${script.name} (${enabledRules.size} rules, backend ${capturer.name})")
+        val rulesById = enabledRules.associateBy { it.id }
+        var reportedFrame = false
+        var reportedSpaceMismatch = false
+        var reportedSkips = false
         while (currentCoroutineContext().isActive) {
             val frameStarted = SystemClock.elapsedRealtime()
             val settings = settingsRepo.load()
@@ -100,18 +104,76 @@ class ScriptRunner(
             // Converting the whole screen every frame (plus a same-sized grayscale
             // array) was ~23MB of garbage per scan and the main source of jank.
             val regions = LinkedHashMap<String, PxRect>()
+            val mismatched = mutableListOf<Rule>()
+            // Rules that cannot be matched at all this frame, and why: "no search region" in
+            // the periodic line cannot be told apart from a region drawn in the wrong place.
+            val skipped = mutableListOf<String>()
             for (rule in enabledRules) {
-                val template = templates[rule.id] ?: continue
+                val template = templates[rule.id]
+                if (template == null) {
+                    skipped += "'${rule.name}' template could not be read"
+                    continue
+                }
+                // A rule is only matchable while the capture space matches the one its template
+                // was cropped in. Getting this wrong is not a near miss: the template's pixels
+                // can never line up, so the rule either never fires or fires on something that
+                // merely happens to correlate.
+                if (rule.frameWidth > 0 && rule.frameHeight > 0 &&
+                    (rule.frameWidth != frame.width || rule.frameHeight != frame.height)
+                ) {
+                    mismatched += rule
+                    continue
+                }
                 // The editor's measured alignment moves the drawn region onto the same
                 // place in a screenshot; zero on devices where they already agree.
                 val region = rule.searchRegion
                     .translated(rule.alignX, rule.alignY)
                     .clampedTo(frame.width, frame.height)
-                if (region.width < template.width || region.height < template.height) continue
+                if (region.width < template.width || region.height < template.height) {
+                    skipped += "'${rule.name}' search area ${region.width}x${region.height} is " +
+                        "smaller than its template " +
+                        "${template.width}x${template.height}"
+                    continue
+                }
                 regions[rule.id] = region
+            }
+            if (skipped.isNotEmpty() && !reportedSkips) {
+                reportedSkips = true
+                onEvent("Not matching: ${skipped.joinToString("; ")}")
+            }
+            if (mismatched.isNotEmpty() && !reportedSpaceMismatch) {
+                reportedSpaceMismatch = true
+                val rule = mismatched.first()
+                onEvent(
+                    "Capture space mismatch: '${rule.name}' was captured at " +
+                        "${rule.frameWidth}x${rule.frameHeight}" +
+                        (if (rule.captureBackend.isEmpty()) "" else " (${rule.captureBackend})") +
+                        " but captures are now ${frame.width}x${frame.height}. Not matching it — " +
+                        "re-capture its template with the current capture backend.",
+                )
+            }
+            if (!reportedFrame && regions.isNotEmpty()) {
+                reportedFrame = true
+                onEvent("frame ${frame.width}x${frame.height} via ${capturer.name}")
+                // One line per rule: the alignment is what has to be checked against a
+                // mismatch, and a single long line gets clipped in the floating panel.
+                for ((ruleId, region) in regions) {
+                    val rule = rulesById.getValue(ruleId)
+                    val template = templates[ruleId]!!
+                    onEvent(
+                        "'${rule.name}': region ${region.width}x${region.height} at " +
+                            "(${region.left},${region.top}), template ${template.width}x" +
+                            "${template.height}, align (${rule.alignX},${rule.alignY}), " +
+                            "drawn at (${rule.searchRegion.left},${rule.searchRegion.top})",
+                    )
+                }
             }
             val union = regions.values.reduceOrNull { a, b -> a.union(b) }
             val matches = HashMap<String, MatchResult>()
+            // Best score per rule regardless of the threshold: without it a status line can
+            // only say "nothing", which cannot distinguish a weak match from a region placed
+            // in the wrong space.
+            val bestScores = LinkedHashMap<String, Float>()
             var grayMs = 0L
             var matchMs = 0L
             if (union != null) {
@@ -132,13 +194,18 @@ class ScriptRunner(
                         region.bottom - union.top,
                     )
                     val matchStarted = System.currentTimeMillis()
-                    val match = TemplateMatcher.findBest(scan, template, local, rule.threshold)
+                    // Threshold 0 (the filter is applied below): the scan itself is identical,
+                    // so this reports the score that was always being computed.
+                    val best = TemplateMatcher.findBest(scan, template, local, 0f)
                     matchMs += System.currentTimeMillis() - matchStarted
-                    if (match != null) {
-                        matches[rule.id] = match.copy(
-                            left = match.left + union.left,
-                            top = match.top + union.top,
-                        )
+                    if (best != null) {
+                        bestScores[rule.id] = best.score
+                        if (best.score >= rule.threshold) {
+                            matches[rule.id] = best.copy(
+                                left = best.left + union.left,
+                                top = best.top + union.top,
+                            )
+                        }
                     }
                 }
             }
@@ -149,7 +216,10 @@ class ScriptRunner(
                 val scanMs = captureMs + grayMs + matchMs
                 onEvent(
                     "scan ${scanMs}ms — capture $captureMs, gray $grayMs, match $matchMs " +
-                        "(${union?.let { "region ${it.width}x${it.height}" } ?: "no search region"})",
+                        "(frame ${frame.width}x${frame.height}, " +
+                        (union?.let { "region ${it.width}x${it.height}" } ?: "no search region") +
+                        ")" +
+                        logScores(bestScores, rulesById),
                 )
             }
 
@@ -170,7 +240,15 @@ class ScriptRunner(
                 state.wasPresent = present
             }
 
-            onDetections(matches.values.toList())
+            // The highlight window draws in display space and matches are in screenshot
+            // space (see clickBounds); the two are the same on most devices, and this shows
+            // a shifted box when they are not — rather than a box that silently lies.
+            onDetections(
+                matches.map { (ruleId, match) ->
+                    val rule = rulesById.getValue(ruleId)
+                    match.translated(rule.tapAlignX - rule.alignX, rule.tapAlignY - rule.alignY)
+                },
+            )
 
             // Fire clicks: each waits its own delay±jitter, then taps a random point.
             for (hit in hits) {
@@ -233,6 +311,16 @@ class ScriptRunner(
             else -> configured.translated(rule.tapAlignX, rule.tapAlignY)
         }
     }
+
+    /** " name 87%" per rule, in rule order; ids keep same-named rules from collapsing. */
+    private fun logScores(scores: Map<String, Float>, rules: Map<String, Rule>): String =
+        scores.entries.joinToString("") { (ruleId, score) ->
+            " ${rules[ruleId]?.name ?: ruleId} ${(score * 100).toInt()}%"
+        }
+
+    /** Same rect in the other coordinate space; a no-op where the spaces coincide. */
+    private fun MatchResult.translated(dx: Int, dy: Int): MatchResult =
+        if (dx == 0 && dy == 0) this else copy(left = left + dx, top = top + dy)
 
     /** Throttles the periodic "where did the scan budget go" status lines. */
     private var lastStatsAt = 0L

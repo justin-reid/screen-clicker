@@ -2,6 +2,7 @@ package com.screenclicker.overlay
 
 import android.content.Context
 import android.graphics.Color
+import android.text.TextUtils
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.MotionEvent
@@ -65,7 +66,11 @@ class ControlPanelView(
     private val statusText = TextView(context).apply {
         setTextColor(0xFFB0BEC5.toInt())
         textSize = 11f
-        maxLines = 3
+        // The runner reports several lines of diagnostics here (frame size, per-rule region,
+        // template and alignment, best score). Three lines silently ate exactly the numbers
+        // that are needed to explain a detection failure.
+        maxLines = 8
+        ellipsize = TextUtils.TruncateAt.END
     }
     private val title = TextView(context).apply {
         text = context.getString(com.screenclicker.R.string.panel_title)

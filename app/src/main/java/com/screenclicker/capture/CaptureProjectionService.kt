@@ -10,6 +10,7 @@ import android.content.pm.ServiceInfo
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
+import android.view.Display
 import android.media.Image
 import android.media.ImageReader
 import android.media.projection.MediaProjection
@@ -63,6 +64,14 @@ class CaptureProjectionService : Service() {
     private var projection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
+    private var displayListener: DisplayManager.DisplayListener? = null
+
+    /** Size the mirror is currently running at, in pixels. */
+    @Volatile
+    private var mirrorWidth = 0
+
+    @Volatile
+    private var mirrorHeight = 0
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -110,11 +119,57 @@ class CaptureProjectionService : Service() {
             null,
         )
 
-        val bounds = getSystemService(WindowManager::class.java).maximumWindowMetrics.bounds
-        val width = bounds.width()
-        val height = bounds.height()
-        val dpi = resources.displayMetrics.densityDpi
+        val bounds = getSystemService(WindowManager::class.java).currentWindowMetrics.bounds
+        replaceMirror(bounds.width(), bounds.height())
 
+        // A fold, an unfold or a display-size change leaves the mirror at the old size, and
+        // from then on every frame is a differently scaled screen. Recreate it on the change.
+        val displayManager = getSystemService(DisplayManager::class.java)
+        val listener = object : DisplayManager.DisplayListener {
+            override fun onDisplayAdded(displayId: Int) = Unit
+
+            override fun onDisplayRemoved(displayId: Int) = Unit
+
+            override fun onDisplayChanged(displayId: Int) {
+                if (displayId != Display.DEFAULT_DISPLAY) return
+                val current =
+                    getSystemService(WindowManager::class.java).currentWindowMetrics.bounds
+                if (current.width() == mirrorWidth && current.height() == mirrorHeight) return
+                Log.i(
+                    TAG,
+                    "display is now ${current.width()}x${current.height()}; recreating the mirror",
+                )
+                replaceMirror(current.width(), current.height())
+            }
+        }
+        displayManager.registerDisplayListener(listener, Handler(Looper.getMainLooper()))
+        displayListener = listener
+    }
+
+    /**
+     * (Re)creates the reader and the virtual display at one size; safe to call on a resize.
+     *
+     * currentWindowMetrics, not maximumWindowMetrics: on a foldable the maximum describes the
+     * unfolded display, and a mirror created at that size renders the current screen scaled —
+     * after which no template cropped from an accessibility screenshot can ever match.
+     */
+    private fun replaceMirror(width: Int, height: Int) {
+        val mediaProjection = projection ?: return
+        virtualDisplay?.release()
+        virtualDisplay = null
+        imageReader?.close()
+        imageReader = null
+        mirrorWidth = width
+        mirrorHeight = height
+        // The cached frame and any pending wake-up belong to the previous size: without
+        // draining the signal, a capture that starts right after a swap would wake on the
+        // stale one and report "no frames" for a cycle.
+        latestFrame.set(null)
+        while (frameSignal.tryReceive().isSuccess) {
+            // discard
+        }
+
+        val dpi = resources.displayMetrics.densityDpi
         val reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 4)
         reader.setOnImageAvailableListener({ activeReader ->
             val image: Image = activeReader.acquireLatestImage() ?: return@setOnImageAvailableListener
@@ -126,19 +181,29 @@ class CaptureProjectionService : Service() {
             frameSignal.trySend(Unit)
         }, Handler(Looper.getMainLooper()))
 
-        val display = mediaProjection.createVirtualDisplay(
-            "screen-clicker",
-            width,
-            height,
-            dpi,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            reader.surface,
-            null,
-            Handler(Looper.getMainLooper()),
-        )
         imageReader = reader
-        virtualDisplay = display
-        Log.i(TAG, "projection running at ${width}x${height}")
+        virtualDisplay = runCatching {
+            mediaProjection.createVirtualDisplay(
+                "screen-clicker",
+                width,
+                height,
+                dpi,
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                reader.surface,
+                null,
+                Handler(Looper.getMainLooper()),
+            )
+        }.getOrNull()
+        if (virtualDisplay == null) {
+            // Leave the service alive: a later display change can try again, and the runner
+            // reports the capture failure clearly instead of matching stale pixels.
+            Log.w(TAG, "could not create the mirror at ${width}x$height")
+            reader.close()
+            imageReader = null
+            latestFrame.set(null)
+        } else {
+            Log.i(TAG, "projection running at ${width}x$height")
+        }
     }
 
     /** Decomposes the RGBA image into ARGB ints, honoring row stride padding. */
@@ -179,7 +244,17 @@ class CaptureProjectionService : Service() {
         val frame = latestFrame.get()
             ?: return CaptureResult.Failure("No frames from screen capture")
         synchronized(frameLock) {
-            return CaptureResult.Success(frame.argb.copyOf(), frame.width, frame.height)
+            // Re-read inside the lock: the mirror can be swapped (fold/unfold) between the wait
+            // above and here, and a frame from the previous display size must not be handed out
+            // as the current capture.
+            val current = latestFrame.get()
+                ?: return CaptureResult.Failure("No frames from screen capture")
+            if (mirrorWidth > 0 &&
+                (current.width != mirrorWidth || current.height != mirrorHeight)
+            ) {
+                return CaptureResult.Failure("Frame is from a previous display size")
+            }
+            return CaptureResult.Success(current.argb.copyOf(), current.width, current.height)
         }
     }
 
@@ -220,6 +295,10 @@ class CaptureProjectionService : Service() {
     }
 
     override fun onDestroy() {
+        displayListener?.let {
+            runCatching { getSystemService(DisplayManager::class.java).unregisterDisplayListener(it) }
+        }
+        displayListener = null
         virtualDisplay?.release()
         virtualDisplay = null
         imageReader?.close()

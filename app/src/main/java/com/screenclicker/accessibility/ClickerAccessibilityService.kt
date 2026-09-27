@@ -237,7 +237,22 @@ class ClickerAccessibilityService : AccessibilityService() {
                     store.loadTemplate(rule)?.let { templates[rule.id] = it }
                 }
                 val settings = SettingsRepo(context).load()
-                val runner = ScriptRunner(SettingsRepo(context), Capturers.pick(settings))
+                // Prefer the backend the templates were captured with: the capture space has to
+                // match the authored one or no template can ever match (see Rule.frameWidth).
+                // Only rules the runner will actually use: a disabled rule's backend must not
+                // force the whole script onto a capture space its active rules were not
+                // authored in.
+                val authored = script.rules
+                    .filter { it.enabled && it.hasTemplate }
+                    .map { it.captureBackend }
+                    .filter { it.isNotEmpty() }
+                    .distinct()
+                if (authored.size > 1) {
+                    Log.w(TAG, "rules were captured with different backends ${authored}")
+                }
+                val capturer = authored.singleOrNull()?.let { Capturers.byName(it) }
+                    ?: Capturers.pick(settings)
+                val runner = ScriptRunner(SettingsRepo(context), capturer)
                 SettingsRepo(context).setLastRunScriptId(scriptId)
                 _runningScriptId.value = scriptId
                 withContext(Dispatchers.Main) { showRunNotification(script.name) }

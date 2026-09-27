@@ -68,6 +68,22 @@ data class Rule(
      */
     val tapAlignX: Int = 0,
     val tapAlignY: Int = 0,
+    /**
+     * Size of the capture the template was cropped from and the alignments were measured
+     * against, and which backend produced it.
+     *
+     * Capture backends are not interchangeable: a mediaProjection mirror can come out at a
+     * different size than an accessibility screenshot, especially on a foldable, and then a
+     * template cropped in one space can never match inside a region placed in the other —
+     * matching would fail silently or fire on something else. The runner compares the frame
+     * it gets against these and refuses to match rather than clicking the wrong thing.
+     *
+     * Zero means "unknown" (rules saved before this was recorded): matching proceeds as it
+     * did before.
+     */
+    val frameWidth: Int = 0,
+    val frameHeight: Int = 0,
+    val captureBackend: String = "",
     /** Match score (0..1) required to trigger. */
     val threshold: Float = 0.90f,
     val clickMode: ClickMode = ClickMode.ON_IMAGE,

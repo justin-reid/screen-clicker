@@ -21,4 +21,16 @@ object Capturers {
             if (CaptureProjectionService.isReady) MediaProjectionCapture()
             else AccessibilityCapture()
     }
+
+    /**
+     * The backend a rule's template was captured with, when it is usable right now. Used to
+     * prefer the space the rule was authored in — see [com.screenclicker.model.Rule.frameWidth].
+     */
+    fun byName(name: String): ScreenCapturer? = when (name) {
+        BACKEND_MEDIA_PROJECTION -> MediaProjectionCapture().takeIf { it.isAvailable() }
+        BACKEND_ACCESSIBILITY -> AccessibilityCapture().takeIf { it.isAvailable() }
+        else -> null
+    }
+
+    val knownBackends: List<String> = listOf(BACKEND_AUTO, BACKEND_MEDIA_PROJECTION, BACKEND_ACCESSIBILITY)
 }

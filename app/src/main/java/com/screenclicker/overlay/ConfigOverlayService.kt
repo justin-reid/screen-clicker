@@ -22,10 +22,12 @@ import androidx.core.app.ServiceCompat
 import com.screenclicker.R
 import com.screenclicker.accessibility.ClickerAccessibilityService
 import com.screenclicker.capture.CaptureResult
+import com.screenclicker.capture.Capturers
 import com.screenclicker.model.ClickMode
 import com.screenclicker.model.PxRect
 import com.screenclicker.model.Rule
 import com.screenclicker.store.ScriptStore
+import com.screenclicker.store.SettingsRepo
 import com.screenclicker.ui.openAccessibilitySettings
 import com.screenclicker.vision.GrayImage
 import com.screenclicker.vision.TemplateMatcher
@@ -101,6 +103,7 @@ class ConfigOverlayService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var store: ScriptStore
+    private lateinit var settingsRepo: SettingsRepo
     private lateinit var windowManager: WindowManager
 
     /** At most one rectangle window exists at a time. */
@@ -131,6 +134,25 @@ class ConfigOverlayService : Service() {
     private var probedY: Int? = null
     private var windowX: Int? = null
     private var windowY: Int? = null
+
+    /**
+     * The most recent capture: its size and backend. Recorded on the rule only when that
+     * capture also produced the rule's template (see [templateCapturedThisSession]).
+     */
+    private var lastFrameWidth = 0
+    private var lastFrameHeight = 0
+    private var lastBackend = ""
+
+    /**
+     * True once this session has written a NEW template PNG for the rule.
+     *
+     * Alignment and frame metadata may only be persisted together with the template they
+     * describe. A session that merely checked a match did measure a capture, but it did not
+     * produce the rule's template: overwriting the recorded alignment or frame size then would
+     * leave the engine searching a region offset from the template's own content (or matching
+     * across a frame-size change it knows nothing about).
+     */
+    private var templateCapturedThisSession = false
 
     /**
      * Correction for screenshot-space coordinates (the crop, the search region): a successful
@@ -179,6 +201,7 @@ class ConfigOverlayService : Service() {
     override fun onCreate() {
         super.onCreate()
         store = ScriptStore(this)
+        settingsRepo = SettingsRepo(this)
         windowManager = getSystemService(WindowManager::class.java)!!
         refreshScreenMetrics()
         startInForeground()
@@ -254,6 +277,10 @@ class ConfigOverlayService : Service() {
         ruleAlignY = current.alignY
         ruleTapAlignX = current.tapAlignX
         ruleTapAlignY = current.tapAlignY
+        lastFrameWidth = current.frameWidth
+        lastFrameHeight = current.frameHeight
+        lastBackend = current.captureBackend
+        templateCapturedThisSession = false
         probedX = null
         probedY = null
         windowX = null
@@ -537,6 +564,10 @@ class ConfigOverlayService : Service() {
      * the marker lives in the handle margin, outside the cropped area.
      */
     private suspend fun probeCapture(target: Bubble?): CaptureResult? {
+        // The same backend chooser the runner uses: the alignment and the template have to be
+        // authored in the space the run will see (a mediaProjection mirror and an accessibility
+        // screenshot are not interchangeable — see Rule.frameWidth).
+        val capturer = Capturers.pick(settingsRepo.load())
         withContext(Dispatchers.Main) {
             toolbar?.visibility = View.INVISIBLE
             ControlPanelService.setMuted(true)
@@ -545,7 +576,13 @@ class ConfigOverlayService : Service() {
         }
         try {
             delay(PROBE_SETTLE_MS) // let the compositor show the probe frame
-            return ClickerAccessibilityService.captureScreen()
+            val result = capturer.capture()
+            if (result is CaptureResult.Success) {
+                lastFrameWidth = result.width
+                lastFrameHeight = result.height
+                lastBackend = capturer.name
+            }
+            return result
         } finally {
             // NonCancellable: Cancel, Save or a rule switch can destroy the service during
             // the up-to-1.3s this can take. Plain withContext throws on entry for an
@@ -658,6 +695,10 @@ class ConfigOverlayService : Service() {
             return
         }
         val target = bubble
+        // The frame size the rule was previously captured at, so a change (fold, backend
+        // switch) can be pointed out while the user is looking at the capture.
+        val previousFrameWidth = rule?.frameWidth ?: 0
+        val previousFrameHeight = rule?.frameHeight ?: 0
         busy = true
         scope.launch {
             try {
@@ -686,15 +727,33 @@ class ConfigOverlayService : Service() {
                         val name = withContext(Dispatchers.Default) {
                             store.saveTemplateFromBitmap(ruleId, crop)
                         }
+                        // A new template now exists, and the alignment/frame recorded above are
+                        // the ones this crop was taken with, so Save may persist them.
+                        templateCapturedThisSession = true
                         rule = rule?.copy(templateFile = name)
+                        // A template captured in a different capture space than the rule
+                        // records cannot match at run time; say so while the user is here.
+                        val frameChanged = previousFrameWidth > 0 && lastFrameWidth > 0 &&
+                            (lastFrameWidth != previousFrameWidth ||
+                                lastFrameHeight != previousFrameHeight)
+                        val frameNote = if (frameChanged) {
+                            " — capture size changed from ${previousFrameWidth}x" +
+                                "${previousFrameHeight}"
+                        } else {
+                            ""
+                        }
                         val label = buildString {
                             append("${region.width} x ${region.height} px")
                             if (alignX != 0 || alignY != 0) append(" · align $alignX,$alignY")
+                            append(frameNote)
                         }
                         toolbar?.setTemplatePreview(crop, label)
                         setStatus(
-                            "Template captured (${region.width}x${region.height})" +
-                                if (probed) "" else " — alignment probe not visible",
+                            buildString {
+                                append("Template captured (${region.width}x${region.height})")
+                                if (!probed) append(" — alignment probe not visible")
+                                append(frameNote)
+                            },
                         )
                     }
 
@@ -804,12 +863,17 @@ class ConfigOverlayService : Service() {
             // measured alignments stored alongside for the engine to apply.
             searchRegion = rects[RectBubbleView.Role.SEARCH] ?: current.searchRegion,
             templateRegion = rects[RectBubbleView.Role.TEMPLATE] ?: current.templateRegion,
-            // A fallback (window offset) must not overwrite what a probe measured properly
-            // in an earlier session.
-            alignX = if (probedThisSession) alignX else current.alignX,
-            alignY = if (probedThisSession) alignY else current.alignY,
-            tapAlignX = if (windowX != null) tapAlignX else current.tapAlignX,
-            tapAlignY = if (windowY != null) tapAlignY else current.tapAlignY,
+            // A new template was cropped this session, so the value it was cropped with is the
+            // one to keep — including the window-offset fallback, since the crop used that too.
+            // Without a new template, everything stays exactly as the rule had it.
+            alignX = if (templateCapturedThisSession) alignX else current.alignX,
+            alignY = if (templateCapturedThisSession) alignY else current.alignY,
+            tapAlignX = if (templateCapturedThisSession) tapAlignX else current.tapAlignX,
+            tapAlignY = if (templateCapturedThisSession) tapAlignY else current.tapAlignY,
+            frameWidth = if (templateCapturedThisSession) lastFrameWidth else current.frameWidth,
+            frameHeight =
+                if (templateCapturedThisSession) lastFrameHeight else current.frameHeight,
+            captureBackend = if (templateCapturedThisSession) lastBackend else current.captureBackend,
         )
         if (updated.clickMode == ClickMode.ON_REGION) {
             updated = updated.copy(clickRegion = rects[RectBubbleView.Role.CLICK] ?: updated.clickRegion)
