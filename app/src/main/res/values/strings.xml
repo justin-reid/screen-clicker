@@ -26,4 +26,9 @@
     <string name="overlay_save">Save</string>
     <string name="overlay_cancel">Cancel</string>
     <string name="overlay_pick_app_hint">Pick your target app from Recents — the editor stays on screen.</string>
+    <string name="overlay_service_off">Screen Clicker\'s accessibility service is OFF. Capturing needs it — enable it in Settings, then come back here.</string>
+    <string name="overlay_service_connecting">Accessibility service is enabled but not connected yet. Try Capture again in a moment.</string>
+    <string name="overlay_service_connected">Accessibility service connected — capture is ready.</string>
+    <string name="overlay_enable_access">Enable access</string>
+    <string name="overlay_enable_hint">In the list, tap Screen Clicker, turn it on, then return here.</string>
 </resources>

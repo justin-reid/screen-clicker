@@ -66,6 +66,17 @@ class ScriptStore(private val context: Context) {
         return file.name
     }
 
+    /**
+     * Stores an externally supplied image (gallery/file pick) as this rule's template.
+     * Same deterministic path as [saveTemplate], so the rule's templateFile reference is
+     * unchanged and the previous image is replaced.
+     */
+    fun saveTemplateFromBitmap(ruleId: String, bitmap: Bitmap): String {
+        val file = templateFile(ruleId)
+        file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        return file.name
+    }
+
     fun deleteTemplate(ruleId: String) {
         templateFile(ruleId).delete()
     }

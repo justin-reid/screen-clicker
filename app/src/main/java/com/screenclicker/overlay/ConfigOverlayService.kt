@@ -8,7 +8,9 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.PixelFormat
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.util.Log
 import android.view.Gravity
 import android.view.View
@@ -22,6 +24,7 @@ import com.screenclicker.model.ClickMode
 import com.screenclicker.model.PxRect
 import com.screenclicker.model.Rule
 import com.screenclicker.store.ScriptStore
+import com.screenclicker.ui.openAccessibilitySettings
 import com.screenclicker.vision.GrayImage
 import com.screenclicker.vision.TemplateMatcher
 import kotlinx.coroutines.CoroutineScope
@@ -73,6 +76,8 @@ class ConfigOverlayService : Service() {
         val savedRules = MutableStateFlow<Rule?>(null)
 
         const val EXTRA_RULE_ID = "ruleId"
+
+        private const val SERVICE_POLL_MS = 1_500L
     }
 
     private class Bubble(val view: RectBubbleView, val params: WindowManager.LayoutParams)
@@ -91,6 +96,21 @@ class ConfigOverlayService : Service() {
     private var rule: Rule? = null
     private var ruleScriptId: String? = null
     private var busy = false
+
+    /**
+     * Watches the accessibility service state while the editor is up. It is what takes
+     * the screenshot and performs the taps, and Android switches it off whenever the
+     * app is reinstalled/updated — so the user needs to see that here, live, rather
+     * than infer it from a failed capture.
+     */
+    private val uiHandler = Handler(Looper.getMainLooper())
+    private var lastServiceStateKey: String? = null
+    private val serviceWatchdog = object : Runnable {
+        override fun run() {
+            syncServiceState()
+            uiHandler.postDelayed(this, SERVICE_POLL_MS)
+        }
+    }
 
     private val marginPx: Int by lazy { (20 * resources.displayMetrics.density).toInt() }
     private val screenWidth: Int by lazy {
@@ -123,7 +143,29 @@ class ConfigOverlayService : Service() {
             initRects()
             buildWindows()
         }
+        if (bubbles.isNotEmpty()) syncServiceState()
+        uiHandler.removeCallbacks(serviceWatchdog)
+        uiHandler.post(serviceWatchdog)
         return START_NOT_STICKY
+    }
+
+    /** Diffed so the toolbar only updates on real transitions. */
+    private fun syncServiceState() {
+        val enabled = ClickerAccessibilityService.isEnabled(this)
+        val running = ClickerAccessibilityService.isRunning
+        val key = "$enabled/$running"
+        if (key == lastServiceStateKey) return
+        lastServiceStateKey = key
+        val toolbar = toolbar ?: return
+        toolbar.setCaptureEnabled(running)
+        when {
+            !enabled -> toolbar.setAlert(getString(R.string.overlay_service_off), showEnableAction = true)
+            !running -> toolbar.setAlert(getString(R.string.overlay_service_connecting))
+            else -> {
+                toolbar.setAlert(null)
+                toolbar.setStatus(getString(R.string.overlay_service_connected))
+            }
+        }
     }
 
     private fun initRects() {
@@ -262,6 +304,11 @@ class ConfigOverlayService : Service() {
             toolbar?.setStatus(getString(R.string.overlay_pick_app_hint))
         }
 
+        override fun onEnableAccess() {
+            runCatching { openAccessibilitySettings() }
+            setStatus(getString(R.string.overlay_enable_hint))
+        }
+
         override fun onSave() = saveAndClose()
         override fun onCancel() = stopSelf()
 
@@ -314,8 +361,19 @@ class ConfigOverlayService : Service() {
         }
     }
 
+    /**
+     * Refuses early with a message that says what to do, instead of failing deep inside
+     * the capture path. Returns true when capture may proceed.
+     */
+    private fun requireService(): Boolean {
+        if (ClickerAccessibilityService.isRunning) return true
+        lastServiceStateKey = null // force the alert strip to re-evaluate right now
+        syncServiceState()
+        return false
+    }
+
     private fun captureTemplate() {
-        if (busy) return
+        if (busy || !requireService()) return
         busy = true
         scope.launch {
             try {
@@ -349,7 +407,7 @@ class ConfigOverlayService : Service() {
 
     private fun checkMatch() {
         val current = rule ?: return
-        if (busy) return
+        if (busy || !requireService()) return
         busy = true
         scope.launch {
             try {
@@ -432,6 +490,7 @@ class ConfigOverlayService : Service() {
     }
 
     override fun onDestroy() {
+        uiHandler.removeCallbacks(serviceWatchdog)
         for (bubble in bubbles.values) {
             runCatching { windowManager.removeView(bubble.view) }
         }

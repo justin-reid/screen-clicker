@@ -1,10 +1,12 @@
 package com.screenclicker.accessibility
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.accessibilityservice.GestureDescription
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.ComponentName
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
@@ -17,6 +19,7 @@ import android.os.SystemClock
 import android.util.Log
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityManager
 import androidx.core.app.NotificationCompat
 import com.screenclicker.capture.Capturers
 import com.screenclicker.capture.CaptureResult
@@ -75,7 +78,25 @@ class ClickerAccessibilityService : AccessibilityService() {
         @Volatile
         private var instance: ClickerAccessibilityService? = null
 
+        /** Bound and connected: operations will actually work right now. */
         val isRunning: Boolean get() = instance != null
+
+        /**
+         * True when the user has the service switched on in system settings. Narrower
+         * than [isRunning]: enabled-but-not-yet-bound is a real state (the system binds
+         * a moment after enabling, and Android disables the toggle on reinstall/update),
+         * and it deserves a different message than "it is off".
+         */
+        fun isEnabled(context: android.content.Context): Boolean {
+            val manager = context.getSystemService(AccessibilityManager::class.java) ?: return false
+            val expected = ComponentName(context, ClickerAccessibilityService::class.java)
+            return manager
+                .getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
+                .any { info ->
+                    val serviceInfo = info.resolveInfo?.serviceInfo ?: return@any false
+                    ComponentName(serviceInfo.packageName, serviceInfo.name) == expected
+                }
+        }
 
         /** Id of the script currently executing, or null. UI and QS tile observe this. */
         private val _runningScriptId = MutableStateFlow<String?>(null)
