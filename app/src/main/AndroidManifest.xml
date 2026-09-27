@@ -4,6 +4,7 @@
     <!-- Overlay windows (config editor + detection highlights) are added in M4/M6. -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
@@ -39,6 +40,19 @@
             <meta-data
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <!--
+          Fullscreen rule editor drawn over the target app. A foreground service only to
+          keep that window alive while the user is actively editing; it captures nothing.
+        -->
+        <service
+            android:name=".overlay.ConfigOverlayService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Fullscreen rect editor for configuring screen-click rules; visible only while the user is actively editing a rule." />
         </service>
 
     </application>

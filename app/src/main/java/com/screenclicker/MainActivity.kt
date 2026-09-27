@@ -1,8 +1,13 @@
 package com.screenclicker
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
@@ -25,10 +30,14 @@ class MainActivity : ComponentActivity() {
     private lateinit var store: ScriptStore
     private lateinit var settingsRepo: SettingsRepo
 
+    private val requestNotifications =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         store = ScriptStore(this)
         settingsRepo = SettingsRepo(this)
+        requestNotificationsIfNeeded()
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
@@ -68,6 +77,15 @@ class MainActivity : ComponentActivity() {
                 onBack = { screen = Screen.Scripts },
             )
         }
+    }
+
+    private fun requestNotificationsIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        val granted = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.POST_NOTIFICATIONS,
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!granted) requestNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 }
 

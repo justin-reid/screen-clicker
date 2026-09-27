@@ -6,4 +6,17 @@
     <string name="accessibility_service_description">Watches the screen for images you
         choose and taps for you. Captures the screen and performs taps only while a
         script you configured is running.</string>
+
+    <string name="channel_overlay">Editing overlay</string>
+    <string name="channel_overlay_description">Shown while the rule editor is on screen.</string>
+    <string name="overlay_notification_text">Editing a rule on screen</string>
+
+    <string name="overlay_role_search">Search area</string>
+    <string name="overlay_role_template">Capture area</string>
+    <string name="overlay_role_click">Click area</string>
+    <string name="overlay_capture">Capture template</string>
+    <string name="overlay_check">Check match</string>
+    <string name="overlay_save">Save</string>
+    <string name="overlay_cancel">Cancel</string>
+    <string name="overlay_status_hint">Drag the highlighted box; pick which box with the buttons above.</string>
 </resources>

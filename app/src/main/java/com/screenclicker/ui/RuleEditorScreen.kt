@@ -1,5 +1,9 @@
 package com.screenclicker.ui
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -19,23 +23,28 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.screenclicker.model.Cadence
 import com.screenclicker.model.ClickMode
 import com.screenclicker.model.PxRect
 import com.screenclicker.model.Rule
+import com.screenclicker.overlay.ConfigOverlayService
 import com.screenclicker.store.ScriptStore
 
 /**
- * Rule editor with numeric region fields for now; M4 adds the on-screen graphical
- * editor (drag/resize rects over the live app, crop templates from the screen).
+ * Rule editor. Regions are also editable numerically here, but the intended flow is
+ * the on-screen editor ([ConfigOverlayService]): drag rectangles over the live app,
+ * capture the template from the screen itself, check the match live, save — the saved
+ * rule arrives back here through [ConfigOverlayService.savedRules].
  */
 @Composable
 fun RuleEditorScreen(
@@ -44,10 +53,21 @@ fun RuleEditorScreen(
     ruleId: String,
     onBack: () -> Unit,
 ) {
+    val context = LocalContext.current
     var script by remember {
         mutableStateOf(store.list().firstOrNull { it.id == scriptId })
     }
     var rule by remember { mutableStateOf(script?.ruleById(ruleId)) }
+
+    // Hot-reload when the overlay saves.
+    LaunchedEffect(Unit) {
+        ConfigOverlayService.savedRules.collect { saved ->
+            if (saved?.id == ruleId) {
+                rule = saved
+                script = store.list().firstOrNull { it.id == scriptId }
+            }
+        }
+    }
 
     val current = script ?: return
     val editing = rule ?: return
@@ -103,11 +123,30 @@ fun RuleEditorScreen(
                 Text("Match", style = MaterialTheme.typography.titleSmall)
                 Text(
                     text = if (editing.hasTemplate) {
-                        "Template captured: ${editing.templateFile}"
+                        "Template captured (${editing.templateFile})"
                     } else {
-                        "No template yet — use the on-screen editor (arrives in M4) to draw " +
-                            "the search area and capture what to look for."
+                        "No template yet — capture one with the on-screen editor below."
                     },
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Button(onClick = {
+                    if (Settings.canDrawOverlays(context)) {
+                        ConfigOverlayService.start(context, editing.id)
+                    } else {
+                        context.startActivity(
+                            Intent(
+                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                Uri.parse("package:${context.packageName}"),
+                            ),
+                        )
+                    }
+                }) {
+                    Text("Edit regions & capture on screen")
+                }
+                Text(
+                    text = "The on-screen editor draws over whatever app you like: drag the " +
+                        "search and click rectangles into place, capture the template, and " +
+                        "check the live match before saving.",
                     style = MaterialTheme.typography.bodySmall,
                 )
 
