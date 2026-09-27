@@ -18,6 +18,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import android.view.Display
+import android.view.View
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityManager
 import androidx.core.app.NotificationCompat
@@ -102,6 +103,13 @@ class ClickerAccessibilityService : AccessibilityService() {
         private val _runningScriptId = MutableStateFlow<String?>(null)
         val runningScriptId = _runningScriptId.asStateFlow()
 
+        /**
+         * Latest line from the runner (scan timings, detections, errors). The floating
+         * control panel shows it, so the user gets feedback without opening the app.
+         */
+        private val _lastRunnerEvent = MutableStateFlow<String?>(null)
+        val lastRunnerEvent = _lastRunnerEvent.asStateFlow()
+
         /** Package of the app currently in the foreground, when we can see it. */
         val foregroundPackage: String?
             get() = instance?.rootInActiveWindow?.packageName?.toString()
@@ -114,6 +122,14 @@ class ClickerAccessibilityService : AccessibilityService() {
         /** Taps the screen at the given coordinates; returns false when it did not land. */
         suspend fun tap(x: Float, y: Float): Boolean =
             instance?.tap(x, y) ?: false
+
+        /**
+         * Temporarily hides the detection highlight layer so it cannot appear inside a
+         * screenshot taken by the rule editor. Must be called from the main thread.
+         */
+        fun setDetectionLayerVisible(visible: Boolean) {
+            instance?.detectionView?.visibility = if (visible) View.VISIBLE else View.INVISIBLE
+        }
 
         /** Opens the system Recents — how the rule editor lets the user switch apps. */
         fun goRecents(): Boolean =
@@ -148,6 +164,11 @@ class ClickerAccessibilityService : AccessibilityService() {
      * Generations guard a restart race: the old run's finally must not tear down the
      * new run's window when a script is restarted while already running.
      */
+    /**
+     * Written on the main thread, read from the runner's background dispatcher — hence
+     * @Volatile, which is what makes the update visible to the scan loop at all.
+     */
+    @Volatile
     private var detectionView: com.screenclicker.overlay.DetectionHighlightView? = null
     private var detectionGeneration = 0
 
@@ -193,25 +214,34 @@ class ClickerAccessibilityService : AccessibilityService() {
     private fun beginRun(scriptId: String) {
         if (runnerJob?.isActive == true) endRun()
         val context = this
-        val store = ScriptStore(context)
-        val script = store.list().firstOrNull { it.id == scriptId }
-        if (script == null) {
-            Log.w(TAG, "startScript: script $scriptId not found")
-            return
-        }
-        val templates = HashMap<String, GrayImage>()
-        for (rule in script.rules) {
-            store.loadTemplate(rule)?.let { templates[rule.id] = it }
-        }
-
-        val settings = SettingsRepo(context).load()
-        val runner = ScriptRunner(SettingsRepo(context), Capturers.pick(settings))
-        SettingsRepo(context).setLastRunScriptId(scriptId)
-        val detectionGen = if (settings.showDetections) showDetectionOverlay() else -1
-        runnerJob = serviceScope.launch {
-            _runningScriptId.value = scriptId
-            showRunNotification(script.name)
+        // The highlight window must be added from the main thread; everything else the
+        // run needs (script JSON, template PNGs) is loaded below, off it.
+        val detectionGen =
+            if (SettingsRepo(context).load().showDetections) showDetectionOverlay() else -1
+        // The scan loop (screenshot copy, grayscale, matching) is CPU-bound and must not
+        // run on the main thread: it used to, which froze the UI and our own overlays for
+        // most of every scan interval. Only the overlay calls below hop back to main.
+        runnerJob = serviceScope.launch(Dispatchers.Default) {
+            val job = coroutineContext[Job]
             try {
+                // Loading scripts and decoding template PNGs is disk + CPU work; doing it
+                // here instead of before the launch keeps Start from hitching the UI.
+                val store = ScriptStore(context)
+                val script = store.list().firstOrNull { it.id == scriptId }
+                if (script == null) {
+                    Log.w(TAG, "startScript: script $scriptId not found")
+                    return@launch
+                }
+                val templates = HashMap<String, GrayImage>()
+                for (rule in script.rules) {
+                    store.loadTemplate(rule)?.let { templates[rule.id] = it }
+                }
+                val settings = SettingsRepo(context).load()
+                val runner = ScriptRunner(SettingsRepo(context), Capturers.pick(settings))
+                SettingsRepo(context).setLastRunScriptId(scriptId)
+                _runningScriptId.value = scriptId
+                withContext(Dispatchers.Main) { showRunNotification(script.name) }
+
                 runner.run(
                     script = script,
                     templates = templates,
@@ -220,16 +250,24 @@ class ClickerAccessibilityService : AccessibilityService() {
                     onDetections = { matches ->
                         detectionView?.update(matches)
                     },
-                    onEvent = { Log.i(TAG, "runner: $it") },
+                    onEvent = { message ->
+                        Log.i(TAG, "runner: $message")
+                        _lastRunnerEvent.value = message
+                    },
                 )
             } catch (e: Exception) {
                 if (e !is kotlinx.coroutines.CancellationException) {
                     Log.e(TAG, "runner crashed", e)
                 }
             } finally {
-                _runningScriptId.value = null
-                cancelRunNotification()
-                hideDetectionOverlay(detectionGen)
+                // Only the run that is still current may clear the shared state: a
+                // cancelled predecessor cancelling later would otherwise report "idle"
+                // (and kill the notification) while the new run is clicking away.
+                if (runnerJob === job) {
+                    _runningScriptId.value = null
+                    cancelRunNotification()
+                }
+                withContext(Dispatchers.Main) { hideDetectionOverlay(detectionGen) }
             }
         }
     }
@@ -302,43 +340,50 @@ class ClickerAccessibilityService : AccessibilityService() {
         getSystemService(NotificationManager::class.java).cancel(ENGINE_NOTIFICATION_ID)
     }
 
+    /** A screenshot or the system's refusal; see [requestScreenshot]. */
+    private class ScreenshotOutcome(val result: ScreenshotResult?, val errorCode: Int)
+
     /**
      * One screenshot, throttled to the system rate limit. Returns [CaptureResult.Success]
      * with ARGB ints, or [CaptureResult.Failure] with a human-readable reason.
      *
-     * Runs on the main thread (the service's callbacks arrive there anyway); the mutex
-     * means concurrent callers queue up behind one rate-limit window instead of racing.
+     * The *request* has to happen on the main thread (that is where the callback and the
+     * rate-limit timer live) but the hardware-buffer → ARGB copy is ~2.8M pixels, so it
+     * runs on a background dispatcher. Doing that copy on main stalled the UI on every
+     * scan — with a 500ms scan interval that was the app's single worst source of lag.
+     * The mutex means concurrent callers queue behind one rate-limit window.
      */
     suspend fun capture(): CaptureResult = captureMutex.withLock {
-        withContext(Dispatchers.Main) {
-            val since = SystemClock.uptimeMillis() - lastCaptureRequestAt
-            if (since in 1 until MIN_CAPTURE_INTERVAL_MS) {
-                delay(MIN_CAPTURE_INTERVAL_MS - since)
-            }
-            lastCaptureRequestAt = SystemClock.uptimeMillis()
-            suspendCancellableCoroutine { cont ->
-                takeScreenshot(
-                    Display.DEFAULT_DISPLAY,
-                    mainHandler::post,
-                    object : TakeScreenshotCallback {
-                        override fun onSuccess(result: ScreenshotResult) {
-                            if (cont.isActive) {
-                                cont.resume(convert(result))
-                            } else {
-                                result.hardwareBuffer.close()
-                            }
-                        }
+        val outcome = requestScreenshot()
+        val shot = outcome.result
+            ?: return@withLock CaptureResult.Failure("takeScreenshot failed (${outcome.errorCode})")
+        withContext(Dispatchers.Default) { convert(shot) }
+    }
 
-                        override fun onFailure(errorCode: Int) {
-                            if (cont.isActive) {
-                                cont.resume(
-                                    CaptureResult.Failure("takeScreenshot failed ($errorCode)"),
-                                )
-                            }
+    private suspend fun requestScreenshot(): ScreenshotOutcome = withContext(Dispatchers.Main) {
+        val since = SystemClock.uptimeMillis() - lastCaptureRequestAt
+        if (since in 1 until MIN_CAPTURE_INTERVAL_MS) {
+            delay(MIN_CAPTURE_INTERVAL_MS - since)
+        }
+        lastCaptureRequestAt = SystemClock.uptimeMillis()
+        suspendCancellableCoroutine { cont ->
+            takeScreenshot(
+                Display.DEFAULT_DISPLAY,
+                mainHandler::post,
+                object : TakeScreenshotCallback {
+                    override fun onSuccess(result: ScreenshotResult) {
+                        if (cont.isActive) {
+                            cont.resume(ScreenshotOutcome(result, 0))
+                        } else {
+                            result.hardwareBuffer.close()
                         }
-                    },
-                )
-            }
+                    }
+
+                    override fun onFailure(errorCode: Int) {
+                        if (cont.isActive) cont.resume(ScreenshotOutcome(null, errorCode))
+                    }
+                },
+            )
         }
     }
 

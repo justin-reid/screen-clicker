@@ -3,6 +3,7 @@ package com.screenclicker.ui
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.net.Uri
 import android.provider.Settings
 import android.widget.Toast
 import androidx.compose.foundation.Image
@@ -44,6 +45,7 @@ import com.screenclicker.capture.CaptureResult
 import com.screenclicker.capture.CaptureProjectionService
 import com.screenclicker.capture.Capturers
 import com.screenclicker.model.GlobalSettings
+import com.screenclicker.overlay.ControlPanelService
 import com.screenclicker.store.SettingsRepo
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -123,6 +125,7 @@ fun AppSettingsScreen(
             onChange = ::save,
             onGrantProjection = onGrantProjection,
         )
+        FloatingPanelCard()
         AccessibilityCard()
         DiagnosticsCard()
     }
@@ -314,6 +317,78 @@ internal fun toPreviewBitmap(result: CaptureResult.Success): ImageBitmap {
 
 internal fun Context.openAccessibilitySettings() {
     startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+}
+
+/**
+ * Turns the floating control panel on or off, remembering the choice and asking for the
+ * overlay permission when it is missing (the panel is a window over other apps).
+ */
+internal fun setFloatingPanel(context: Context, enabled: Boolean) {
+    val repo = SettingsRepo(context)
+    repo.save(repo.load().copy(controlPanelEnabled = enabled))
+    if (!enabled) {
+        ControlPanelService.stop(context)
+        return
+    }
+    if (!Settings.canDrawOverlays(context)) {
+        Toast.makeText(
+            context,
+            "Allow display over other apps to show the panel",
+            Toast.LENGTH_LONG,
+        ).show()
+        context.startActivity(
+            Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:${context.packageName}"),
+            ),
+        )
+        return
+    }
+    ControlPanelService.start(context)
+}
+
+/**
+ * The panel is how the app is meant to be used day to day: run a script, watch it scan,
+ * edit a rule — all on top of the app being automated, with no trips to the launcher.
+ */
+@Composable
+private fun FloatingPanelCard() {
+    val context = LocalContext.current
+    var running by remember { mutableStateOf(ControlPanelService.isRunning) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            running = ControlPanelService.isRunning
+            delay(2_000)
+        }
+    }
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Floating control panel", style = MaterialTheme.typography.titleSmall)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            ) {
+                Text("Show the floating panel")
+                Switch(
+                    checked = running,
+                    onCheckedChange = { on ->
+                        running = on
+                        setFloatingPanel(context, on)
+                    },
+                )
+            }
+            Text(
+                text = "Tap the bubble to expand it: run or stop any script, watch the scan " +
+                    "loop's timings and detections, and open any rule in the on-screen " +
+                    "editor. Drag the bubble to move it, ✕ collapses it back. This is the " +
+                    "intended way to drive the clicker — the app itself is only needed to " +
+                    "create scripts and change settings.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
 }
 
 @Composable

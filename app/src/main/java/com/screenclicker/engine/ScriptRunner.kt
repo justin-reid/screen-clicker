@@ -1,6 +1,8 @@
 package com.screenclicker.engine
 
+import android.os.SystemClock
 import android.util.Log
+import com.screenclicker.capture.CaptureResult
 import com.screenclicker.capture.ScreenCapturer
 import com.screenclicker.model.Cadence
 import com.screenclicker.model.ClickMode
@@ -36,7 +38,13 @@ class ScriptRunner(
     private val capturer: ScreenCapturer,
 ) {
 
-    /** Per-rule runtime state for cadence decisions; survives across frames only. */
+    /**
+     * Per-rule runtime state for cadence decisions; survives across frames only.
+     *
+     * Times are [SystemClock.elapsedRealtime], not wall clock: an NTP correction or a
+     * timezone jump mid-run would otherwise be read as "the interval elapsed" and fire
+     * an extra click (or block one for hours).
+     */
     private class RuleState {
         var wasPresent: Boolean = false
         var lastClickAt: Long = 0L
@@ -65,7 +73,7 @@ class ScriptRunner(
 
         onEvent("Running ${script.name} (${enabledRules.size} rules, backend ${capturer.name})")
         while (currentCoroutineContext().isActive) {
-            val frameStarted = System.currentTimeMillis()
+            val frameStarted = SystemClock.elapsedRealtime()
             val settings = settingsRepo.load()
 
             // Optional app binding: pause scanning while another app is foreground.
@@ -75,32 +83,75 @@ class ScriptRunner(
                 continue
             }
 
-            val screen: GrayImage = when (val capture = capturer.capture()) {
-                is com.screenclicker.capture.CaptureResult.Success ->
-                    GrayImage.fromArgb(capture.argb, capture.width, capture.height)
+            val captureStarted = System.currentTimeMillis()
+            val capture = capturer.capture()
+            val captureMs = System.currentTimeMillis() - captureStarted
+            val frame = when (capture) {
+                is CaptureResult.Success -> capture
 
-                is com.screenclicker.capture.CaptureResult.Failure -> {
+                is CaptureResult.Failure -> {
                     onEvent("Capture failed: ${capture.reason}")
                     delay(1_500)
                     continue
                 }
             }
 
-            // Match every rule this frame.
-            val matches = HashMap<String, MatchResult>()
+            // Only the union of the rules' search regions is converted to grayscale.
+            // Converting the whole screen every frame (plus a same-sized grayscale
+            // array) was ~23MB of garbage per scan and the main source of jank.
+            val regions = LinkedHashMap<String, PxRect>()
             for (rule in enabledRules) {
                 val template = templates[rule.id] ?: continue
-                val region = rule.searchRegion.clampedTo(screen.width, screen.height)
-                if (region.width < template.width || region.height < template.height) {
-                    continue
+                val region = rule.searchRegion.clampedTo(frame.width, frame.height)
+                if (region.width < template.width || region.height < template.height) continue
+                regions[rule.id] = region
+            }
+            val union = regions.values.reduceOrNull { a, b -> a.union(b) }
+            val matches = HashMap<String, MatchResult>()
+            var grayMs = 0L
+            var matchMs = 0L
+            if (union != null) {
+                val grayStarted = System.currentTimeMillis()
+                val scan = GrayImage.fromArgbRegion(frame.argb, frame.width, frame.height, union)
+                grayMs = System.currentTimeMillis() - grayStarted
+
+                for (rule in enabledRules) {
+                    val region = regions[rule.id] ?: continue
+                    val template = templates[rule.id] ?: continue
+                    // The cropped image has its own origin; search in local coords and
+                    // translate the hit back to screen coords, where everything else
+                    // (taps, highlights, click regions) lives.
+                    val local = PxRect(
+                        region.left - union.left,
+                        region.top - union.top,
+                        region.right - union.left,
+                        region.bottom - union.top,
+                    )
+                    val matchStarted = System.currentTimeMillis()
+                    val match = TemplateMatcher.findBest(scan, template, local, rule.threshold)
+                    matchMs += System.currentTimeMillis() - matchStarted
+                    if (match != null) {
+                        matches[rule.id] = match.copy(
+                            left = match.left + union.left,
+                            top = match.top + union.top,
+                        )
+                    }
                 }
-                val match = TemplateMatcher.findBest(screen, template, region, rule.threshold)
-                if (match != null) matches[rule.id] = match
+            }
+
+            // Periodic timing so the user can see where the scan budget goes.
+            if (SystemClock.elapsedRealtime() - lastStatsAt >= STATS_INTERVAL_MS) {
+                lastStatsAt = SystemClock.elapsedRealtime()
+                val scanMs = captureMs + grayMs + matchMs
+                onEvent(
+                    "scan ${scanMs}ms — capture $captureMs, gray $grayMs, match $matchMs " +
+                        "(${union?.let { "region ${it.width}x${it.height}" } ?: "no search region"})",
+                )
             }
 
             // Cadence decisions, then update presence tracking for every rule.
             val hits = mutableListOf<Hit>()
-            val now = System.currentTimeMillis()
+            val now = SystemClock.elapsedRealtime()
             for (rule in enabledRules) {
                 val state = states.getOrPut(rule.id) { RuleState() }
                 val present = matches.containsKey(rule.id)
@@ -109,10 +160,9 @@ class ScriptRunner(
                     Cadence.REPEAT_WHILE_VISIBLE ->
                         present && now - state.lastClickAt >= rule.intervalMs
                 }
-                if (mayClick) {
-                    state.lastClickAt = now
-                    hits += Hit(rule, matches[rule.id]!!)
-                }
+                // lastClickAt is stamped only once a tap actually lands, below: a
+                // refused gesture should not burn the rule's whole interval.
+                if (mayClick) hits += Hit(rule, matches[rule.id]!!)
                 state.wasPresent = present
             }
 
@@ -130,6 +180,7 @@ class ScriptRunner(
                 delay(wait)
                 val (x, y) = bounds.randomPoint(rng)
                 val landed = onTap(x, y)
+                if (landed) states[hit.rule.id]?.lastClickAt = SystemClock.elapsedRealtime()
                 Log.i(
                     TAG,
                     "rule='${hit.rule.name}' score=${"%.2f".format(hit.match.score)} " +
@@ -142,7 +193,7 @@ class ScriptRunner(
             }
 
             // Hold the scan cadence.
-            val elapsed = System.currentTimeMillis() - frameStarted
+            val elapsed = SystemClock.elapsedRealtime() - frameStarted
             delay((settings.scanIntervalMs - elapsed).coerceAtLeast(0))
         }
         onEvent("Stopped")
@@ -161,7 +212,11 @@ class ScriptRunner(
         )
     }
 
+    /** Throttles the periodic "where did the scan budget go" status lines. */
+    private var lastStatsAt = 0L
+
     private companion object {
         const val TAG = "ScriptRunner"
+        const val STATS_INTERVAL_MS = 2_000L
     }
 }

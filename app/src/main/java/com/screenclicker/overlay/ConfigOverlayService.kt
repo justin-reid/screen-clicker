@@ -6,6 +6,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.graphics.Bitmap
 import android.graphics.PixelFormat
 import android.os.Build
 import android.os.Handler
@@ -14,8 +15,10 @@ import android.os.Looper
 import android.util.Log
 import android.view.Gravity
 import android.view.View
+import android.view.WindowInsets
 import android.view.WindowManager
 import androidx.core.app.NotificationCompat
+import kotlin.math.abs
 import androidx.core.app.ServiceCompat
 import com.screenclicker.R
 import com.screenclicker.accessibility.ClickerAccessibilityService
@@ -113,6 +116,29 @@ class ConfigOverlayService : Service() {
     }
 
     private val marginPx: Int by lazy { (20 * resources.displayMetrics.density).toInt() }
+    private val toolbarWidthPx: Int by lazy { (300 * resources.displayMetrics.density).toInt() }
+
+    /**
+     * Height of the status bar. The editor's toolbar used to be placed at y=80px, which is
+     * inside the status bar on most phones — the system swallows touches there, so its
+     * buttons were hard or impossible to hit. Everything now positions itself below this.
+     */
+    private val statusBarInset: Int by lazy {
+        windowManager.currentWindowMetrics.windowInsets
+            .getInsetsIgnoringVisibility(WindowInsets.Type.systemBars())
+            .top
+    }
+
+    /**
+     * Measured correction between the window manager's coordinate origin and the display's
+     * (see [calibrateLayout]). Applied to every position write for the editor windows.
+     */
+    private var originOffsetX = 0
+    private var originOffsetY = 0
+
+    /** The toolbar's position in screen coordinates; the offset above maps it to layout. */
+    private var toolbarLogicalX = 0
+    private var toolbarLogicalY = 0
     private val screenWidth: Int by lazy {
         windowManager.maximumWindowMetrics.bounds.width()
     }
@@ -137,11 +163,21 @@ class ConfigOverlayService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
+        val requested = script.rules.first { it.id == ruleId }
+        // The panel can open the editor for a different rule while one is already up. The
+        // windows and rects belong to the previous rule, so they have to go: otherwise
+        // Save would write this rule's old rectangles into the new rule.
+        if (rule != null && rule?.id != requested.id) {
+            Log.i(TAG, "switching editor to rule ${requested.id}; rebuilding windows")
+            removeWindows()
+            lastServiceStateKey = null
+        }
         ruleScriptId = script.id
-        rule = script.rules.first { it.id == ruleId }
+        rule = requested
         if (bubbles.isEmpty()) {
             initRects()
             buildWindows()
+            scheduleCalibration()
         }
         if (bubbles.isNotEmpty()) syncServiceState()
         uiHandler.removeCallbacks(serviceWatchdog)
@@ -207,7 +243,12 @@ class ConfigOverlayService : Service() {
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             // NO_LIMITS: a rect near the screen edge makes its margin overhang, and
             // without it the window (and its handles) would be clipped at the edge.
+            // LAYOUT_IN_SCREEN makes the window's coordinate space the whole display, so
+            // a rect coordinate means the same thing here as it does in a screenshot and
+            // in dispatchGesture. Without it the origin can sit below the status bar and
+            // every box, crop and tap is silently shifted by that much.
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT,
         ).apply {
@@ -227,21 +268,115 @@ class ConfigOverlayService : Service() {
 
     private fun addToolbar() {
         val view = ConfigToolbarView(this, toolbarCallbacks)
+        val density = resources.displayMetrics.density
         val params = WindowManager.LayoutParams(
-            (300 * resources.displayMetrics.density).toInt(),
+            toolbarWidthPx,
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = screenWidth - (320 * resources.displayMetrics.density).toInt()
-            y = 80
+            x = (screenWidth - toolbarWidthPx - 12 * density).toInt()
+            y = statusBarInset + (12 * density).toInt()
         }
         windowManager.addView(view, params)
         toolbar = view
         toolbarParams = params
+        toolbarLogicalX = params.x
+        toolbarLogicalY = params.y
+    }
+
+    /**
+     * Positions a bubble window so its rect lands exactly on the model rect.
+     *
+     * The window manager does not always agree with the display about where (0,0) is:
+     * on some devices an overlay's y is measured from the bottom of the status bar, which
+     * silently shifts the drawn rectangle — and therefore the captured crop and the taps —
+     * by that amount. Instead of guessing the rule, [calibrateLayout] measures the real
+     * difference once and it is applied here on every position write.
+     */
+    private fun applyRectToBubble(role: RectBubbleView.Role) {
+        val bubble = bubbles[role] ?: return
+        val rect = rects.getValue(role)
+        bubble.params.x = rect.left - marginPx + originOffsetX
+        bubble.params.y = rect.top - marginPx + originOffsetY
+        bubble.params.width = rect.width + 2 * marginPx
+        bubble.params.height = rect.height + 2 * marginPx
+        runCatching { windowManager.updateViewLayout(bubble.view, bubble.params) }
+    }
+
+    private fun applyToolbarPosition() {
+        val params = toolbarParams ?: return
+        val view = toolbar ?: return
+        params.x = toolbarLogicalX + originOffsetX
+        params.y = toolbarLogicalY + originOffsetY
+        runCatching { windowManager.updateViewLayout(view, params) }
+    }
+
+    /**
+     * Arms the one-time origin measurement for after the first real layout pass.
+     *
+     * Not `View.post`: that can run before the view has been through a traversal, where
+     * getLocationOnScreen still returns the pre-layout frame — and a bogus "correction"
+     * would then be baked into every window for the rest of the session.
+     */
+    private fun scheduleCalibration() {
+        val anchor = bubbles.values.firstOrNull()?.view ?: return
+        val observer = object : android.view.ViewTreeObserver.OnGlobalLayoutListener {
+            override fun onGlobalLayout() {
+                if (anchor.viewTreeObserver.isAlive) {
+                    anchor.viewTreeObserver.removeOnGlobalLayoutListener(this)
+                }
+                anchor.post { calibrateLayout() }
+            }
+        }
+        anchor.viewTreeObserver.addOnGlobalLayoutListener(observer)
+    }
+
+    /**
+     * Compares where the windows really landed (getLocationOnScreen, i.e. display
+     * coordinates) with where the model says they should be, and keeps the difference as
+     * a permanent correction. This is what guarantees "the box you see is the pixels that
+     * get cropped and the spot that gets tapped" on any OEM's window manager.
+     *
+     * The correction is the *most common* delta among the windows rather than the first
+     * one found: a rectangle hugging a screen edge can have its margin overhang clamped,
+     * which would otherwise poison the shared offset for every other window.
+     */
+    private fun calibrateLayout(attempt: Int = 0) {
+        if (bubbles.isEmpty()) return
+        val targets = ArrayList<Triple<View, WindowManager.LayoutParams, String>>()
+        for ((role, bubble) in bubbles) targets += Triple(bubble.view, bubble.params, role.name)
+        toolbar?.let { view -> toolbarParams?.let { p -> targets += Triple(view, p, "toolbar") } }
+
+        val location = IntArray(2)
+        val votes = HashMap<Pair<Int, Int>, Int>()
+        for ((view, params, name) in targets) {
+            view.getLocationOnScreen(location)
+            val dx = location[0] - params.x
+            val dy = location[1] - params.y
+            if (dx == 0 && dy == 0) continue
+            if (abs(dx) >= screenWidth || abs(dy) >= screenHeight) {
+                Log.w(TAG, "implausible window offset for $name ($dx,$dy); ignoring")
+                continue
+            }
+            Log.i(TAG, "window origin differs from display for $name by ($dx,$dy)")
+            val key = dx to dy
+            votes[key] = (votes[key] ?: 0) + 1
+        }
+        val chosen = votes.maxByOrNull { it.value }?.key ?: return
+        originOffsetX += chosen.first
+        originOffsetY += chosen.second
+        for ((role, _) in bubbles) applyRectToBubble(role)
+        applyToolbarPosition()
+        if (attempt == 0) {
+            setStatus("Screen alignment corrected by ($originOffsetX,$originOffsetY)")
+        }
+        // Verify the correction held; a second pass catches a stale-layout race.
+        if (attempt < 2) uiHandler.post { calibrateLayout(attempt + 1) }
     }
 
     private val bubbleCallbacks = object : RectBubbleView.Callbacks {
@@ -251,13 +386,8 @@ class ConfigOverlayService : Service() {
             val updated = applyDrag(before, mode, dx, dy)
             if (updated == before) return
             rects[role] = updated
-            val bubble = bubbles.getValue(role)
-            bubble.view.setSize(updated.width, updated.height)
-            bubble.params.x = updated.left - marginPx
-            bubble.params.y = updated.top - marginPx
-            bubble.params.width = updated.width + 2 * marginPx
-            bubble.params.height = updated.height + 2 * marginPx
-            windowManager.updateViewLayout(bubble.view, bubble.params)
+            bubbles.getValue(role).view.setSize(updated.width, updated.height)
+            applyRectToBubble(role)
         }
 
         override fun onDragEnded(role: RectBubbleView.Role) = Unit
@@ -313,10 +443,15 @@ class ConfigOverlayService : Service() {
         override fun onCancel() = stopSelf()
 
         override fun onMove(dx: Int, dy: Int) {
-            val params = toolbarParams ?: return
-            params.x = (params.x + dx).coerceIn(-100, screenWidth - 100)
-            params.y = (params.y + dy).coerceIn(0, screenHeight - 100)
-            toolbar?.let { windowManager.updateViewLayout(it, params) }
+            if (toolbarParams == null) return
+            val density = resources.displayMetrics.density
+            val edge = (24 * density).toInt()
+            // Clamped to below the status bar: a toolbar tucked under it cannot be tapped.
+            toolbarLogicalX = (toolbarLogicalX + dx)
+                .coerceIn(-(toolbarWidthPx - edge), screenWidth - edge)
+            toolbarLogicalY = (toolbarLogicalY + dy)
+                .coerceIn(statusBarInset, screenHeight - edge)
+            applyToolbarPosition()
         }
     }
 
@@ -352,13 +487,30 @@ class ConfigOverlayService : Service() {
      */
     private suspend fun hiddenCapture(): CaptureResult? {
         val views = bubbles.values.map { it.view } + listOfNotNull(toolbar)
-        withContext(Dispatchers.Main) { views.forEach { it.visibility = View.INVISIBLE } }
+        withContext(Dispatchers.Main) {
+            views.forEach { it.visibility = View.INVISIBLE }
+            // Every other overlay window has to go too, or its pixels end up in the
+            // template: the floating control panel is a separate service's window and
+            // the detection layer belongs to the runner.
+            ControlPanelService.setMuted(true)
+            ClickerAccessibilityService.setDetectionLayerVisible(false)
+        }
         try {
             delay(200) // let the compositor drop the hidden frame before requesting
             return ClickerAccessibilityService.captureScreen()
         } finally {
-            withContext(Dispatchers.Main) { views.forEach { it.visibility = View.VISIBLE } }
+            withContext(Dispatchers.Main) {
+                views.forEach { it.visibility = View.VISIBLE }
+                ControlPanelService.setMuted(false)
+                ClickerAccessibilityService.setDetectionLayerVisible(true)
+            }
         }
+    }
+
+    /** The exact pixels that were just saved as the template. */
+    private fun cropBitmap(result: CaptureResult.Success, region: PxRect): Bitmap {
+        val full = Bitmap.createBitmap(result.argb, result.width, result.height, Bitmap.Config.ARGB_8888)
+        return Bitmap.createBitmap(full, region.left, region.top, region.width, region.height)
     }
 
     /**
@@ -385,14 +537,26 @@ class ConfigOverlayService : Service() {
                             setStatus("Capture area is too small")
                             return@launch
                         }
-                        val name = store.saveTemplate(
-                            ruleId = rule?.id ?: return@launch,
-                            argb = result.argb,
-                            width = result.width,
-                            height = result.height,
-                            region = region,
-                        )
+                        val ruleId = rule?.id ?: return@launch
+                        // One crop, built off the main thread, used for both the saved
+                        // template and the preview (this used to build the full-screen
+                        // bitmap twice, once of them on the UI thread).
+                        val crop = withContext(Dispatchers.Default) { cropBitmap(result, region) }
+                        val name = withContext(Dispatchers.Default) {
+                            store.saveTemplateFromBitmap(ruleId, crop)
+                        }
                         rule = rule?.copy(templateFile = name)
+                        // Geometry is logged and shown next to the preview: if the
+                        // screenshot is not the size of the display, its origin is not
+                        // the display's either, and that is worth knowing immediately.
+                        if (result.width != screenWidth || result.height != screenHeight) {
+                            Log.w(
+                                TAG,
+                                "screenshot ${result.width}x${result.height} differs from " +
+                                    "display ${screenWidth}x$screenHeight",
+                            )
+                        }
+                        toolbar?.setTemplatePreview(crop, "${region.width} x ${region.height} px")
                         setStatus("Template captured (${region.width}x${region.height})")
                     }
 
@@ -411,24 +575,41 @@ class ConfigOverlayService : Service() {
         busy = true
         scope.launch {
             try {
-                val template = store.loadTemplate(current)
+                val template = withContext(Dispatchers.Default) { store.loadTemplate(current) }
                 if (template == null) {
                     setStatus("No template captured yet")
                     return@launch
                 }
                 when (val result = hiddenCapture()) {
                     is CaptureResult.Success -> {
-                        val screen = GrayImage.fromArgb(result.argb, result.width, result.height)
-                        val match = TemplateMatcher.findBest(
-                            screen,
-                            template,
-                            (rects[RectBubbleView.Role.SEARCH] ?: return@launch)
-                                .clampedTo(result.width, result.height),
-                            0f,
-                        )
+                        // Same trick as the runner: convert and search only the search
+                        // region, off the main thread — a full-screen grayscale here was
+                        // a visible freeze on every Check.
+                        val region = (rects[RectBubbleView.Role.SEARCH] ?: return@launch)
+                            .clampedTo(result.width, result.height)
+                        if (region.width < template.width || region.height < template.height) {
+                            setStatus("Search area is smaller than the template")
+                            return@launch
+                        }
+                        val match = withContext(Dispatchers.Default) {
+                            val scan = GrayImage.fromArgbRegion(
+                                result.argb,
+                                result.width,
+                                result.height,
+                                region,
+                            )
+                            TemplateMatcher.findBest(
+                                scan,
+                                template,
+                                PxRect(0, 0, region.width, region.height),
+                                0f,
+                            )
+                        }
                         setStatus(
                             match?.let {
-                                "Best match ${(it.score * 100).toInt()}% at (${it.left},${it.top})" +
+                                val left = it.left + region.left
+                                val top = it.top + region.top
+                                "Best match ${(it.score * 100).toInt()}% at ($left,$top)" +
                                     " — threshold ${(current.threshold * 100).toInt()}%"
                             } ?: "Nothing found",
                         )
@@ -441,6 +622,17 @@ class ConfigOverlayService : Service() {
                 busy = false
             }
         }
+    }
+
+    /** Removes every editor window; the model rects survive for a rebuild. */
+    private fun removeWindows() {
+        for (bubble in bubbles.values) {
+            runCatching { windowManager.removeView(bubble.view) }
+        }
+        bubbles.clear()
+        toolbar?.let { runCatching { windowManager.removeView(it) } }
+        toolbar = null
+        toolbarParams = null
     }
 
     private fun saveAndClose() {
@@ -491,12 +683,7 @@ class ConfigOverlayService : Service() {
 
     override fun onDestroy() {
         uiHandler.removeCallbacks(serviceWatchdog)
-        for (bubble in bubbles.values) {
-            runCatching { windowManager.removeView(bubble.view) }
-        }
-        bubbles.clear()
-        toolbar?.let { runCatching { windowManager.removeView(it) } }
-        toolbar = null
+        removeWindows()
         scope.cancel()
         super.onDestroy()
     }

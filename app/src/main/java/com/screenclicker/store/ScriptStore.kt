@@ -2,7 +2,6 @@ package com.screenclicker.store
 
 import android.content.Context
 import android.graphics.Bitmap
-import com.screenclicker.model.PxRect
 import com.screenclicker.model.Rule
 import com.screenclicker.model.Script
 import com.screenclicker.vision.GrayImage
@@ -51,25 +50,11 @@ class ScriptStore(private val context: Context) {
         File(scriptsDir, scriptId + ".json").delete()
     }
 
-    /** Crops the template out of a full-screen capture and stores it as a PNG. */
-    fun saveTemplate(ruleId: String, argb: IntArray, width: Int, height: Int, region: PxRect): String {
-        val file = templateFile(ruleId)
-        val bitmap = Bitmap.createBitmap(argb, width, height, Bitmap.Config.ARGB_8888)
-        val crop = Bitmap.createBitmap(
-            bitmap,
-            region.left,
-            region.top,
-            region.width,
-            region.height,
-        )
-        file.outputStream().use { crop.compress(Bitmap.CompressFormat.PNG, 100, it) }
-        return file.name
-    }
-
     /**
-     * Stores an externally supplied image (gallery/file pick) as this rule's template.
-     * Same deterministic path as [saveTemplate], so the rule's templateFile reference is
-     * unchanged and the previous image is replaced.
+     * Stores a template image: the crop captured on screen, or a picture imported from the
+     * gallery. Always the same deterministic path per rule, so the rule's templateFile
+     * reference never changes and the previous image is simply replaced. Callers build
+     * the bitmap off the main thread — it is a full-size allocate plus PNG compression.
      */
     fun saveTemplateFromBitmap(ruleId: String, bitmap: Bitmap): String {
         val file = templateFile(ruleId)

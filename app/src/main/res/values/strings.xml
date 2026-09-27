@@ -31,4 +31,16 @@
     <string name="overlay_service_connected">Accessibility service connected — capture is ready.</string>
     <string name="overlay_enable_access">Enable access</string>
     <string name="overlay_enable_hint">In the list, tap Screen Clicker, turn it on, then return here.</string>
+
+    <string name="channel_panel">Floating panel</string>
+    <string name="channel_panel_description">Shown while the floating control panel is on screen.</string>
+    <string name="panel_notification_text">Floating control panel is active</string>
+    <string name="panel_title">Screen Clicker</string>
+    <string name="panel_rules">Rules</string>
+    <string name="panel_edit">Edit</string>
+    <string name="panel_open_app">Open app</string>
+    <string name="panel_hide">Hide</string>
+    <string name="panel_accessibility_off">Accessibility service is OFF — nothing can be tapped. Enable it below.</string>
+    <string name="panel_needs_accessibility">Enable the Screen Clicker accessibility service first</string>
+    <string name="panel_needs_overlay_permission">Allow "display over other apps" to edit rules on screen</string>
 </resources>

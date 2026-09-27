@@ -25,9 +25,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import android.widget.Toast
+import androidx.compose.runtime.LaunchedEffect
 import com.screenclicker.accessibility.ClickerAccessibilityService
 import com.screenclicker.model.Script
+import com.screenclicker.overlay.ControlPanelService
 import com.screenclicker.store.ScriptStore
+import kotlinx.coroutines.delay
 
 @Composable
 fun ScriptsScreen(
@@ -38,6 +41,13 @@ fun ScriptsScreen(
     var scripts by remember { mutableStateOf(store.list()) }
     val runningId by ClickerAccessibilityService.runningScriptId.collectAsState()
     val context = LocalContext.current
+    var panelRunning by remember { mutableStateOf(ControlPanelService.isRunning) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            panelRunning = ControlPanelService.isRunning
+            delay(2_000)
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -99,16 +109,29 @@ fun ScriptsScreen(
             }
         }
 
-        Button(
-            onClick = {
-                val fresh = Script(name = "Script ${scripts.size + 1}")
-                store.save(fresh)
-                scripts = store.list()
-                onOpenScript(fresh.id)
-            },
+        Row(
             modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text("New script")
+            Button(
+                onClick = {
+                    val fresh = Script(name = "Script ${scripts.size + 1}")
+                    store.save(fresh)
+                    scripts = store.list()
+                    onOpenScript(fresh.id)
+                },
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("New script")
+            }
+            // Surfaces the panel where scripts are actually run: with it on, you never
+            // have to come back to this screen to start one.
+            OutlinedButton(
+                onClick = { setFloatingPanel(context, !panelRunning) },
+                modifier = Modifier.weight(1f),
+            ) {
+                Text(if (panelRunning) "Hide panel" else "Floating panel")
+            }
         }
     }
 }

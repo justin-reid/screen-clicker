@@ -1,12 +1,14 @@
 package com.screenclicker.overlay
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.widget.Button
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 
@@ -51,6 +53,21 @@ class ConfigToolbarView(
     }
     private val enableButton = Button(context, null, android.R.attr.buttonBarButtonStyle)
 
+    /**
+     * Last captured/imported template, shown right where the user captured it: this is
+     * the only way to see immediately whether the crop really matches the box on screen.
+     */
+    private val previewImage = ImageView(context)
+    private val previewLabel = TextView(context).apply {
+        setTextColor(0xFFCCCCCC.toInt())
+        textSize = 10f
+        setPadding(dp(4), 0, dp(4), dp(2))
+    }
+    private val previewRow = LinearLayout(context).apply {
+        orientation = VERTICAL
+        visibility = GONE
+    }
+
     init {
         orientation = VERTICAL
         setBackgroundColor(0xE6101018.toInt())
@@ -69,20 +86,34 @@ class ConfigToolbarView(
                 setStroke(dp(1), 0x55FFFFFF)
             }
         }
-        var dragLast = 0f to 0f
+        var dragLastX = 0f
+        var dragLastY = 0f
+        // Sub-pixel remainder: raw deltas are floats but the window takes ints, so
+        // truncating every event would stall a slow drag completely.
+        var dragAccX = 0f
+        var dragAccY = 0f
         header.setOnTouchListener { _, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    dragLast = event.rawX to event.rawY
+                    dragLastX = event.rawX
+                    dragLastY = event.rawY
+                    dragAccX = 0f
+                    dragAccY = 0f
                     true
                 }
 
                 MotionEvent.ACTION_MOVE -> {
-                    callbacks.onMove(
-                        (event.rawX - dragLast.first).toInt(),
-                        (event.rawY - dragLast.second).toInt(),
-                    )
-                    dragLast = event.rawX to event.rawY
+                    dragAccX += event.rawX - dragLastX
+                    dragAccY += event.rawY - dragLastY
+                    dragLastX = event.rawX
+                    dragLastY = event.rawY
+                    val dx = dragAccX.toInt()
+                    val dy = dragAccY.toInt()
+                    if (dx != 0 || dy != 0) {
+                        dragAccX -= dx
+                        dragAccY -= dy
+                        callbacks.onMove(dx, dy)
+                    }
                     true
                 }
 
@@ -121,6 +152,11 @@ class ConfigToolbarView(
         }
         actionButton(actionRow, com.screenclicker.R.string.overlay_recents) { callbacks.onSwitchApp() }
         addView(actionRow, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
+
+        previewImage.setPadding(dp(4), dp(4), dp(4), 0)
+        previewRow.addView(previewImage)
+        previewRow.addView(previewLabel)
+        addView(previewRow, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
 
         // Only surfaces when the accessibility service is off or still connecting.
         alertRow.addView(alertText)
@@ -163,6 +199,8 @@ class ConfigToolbarView(
         button.setPadding(dp(6), dp(2), dp(6), dp(2))
         button.minimumWidth = 0
         button.minWidth = 0
+        button.minimumHeight = dp(44)
+        button.minHeight = dp(44)
         button.setOnClickListener { callbacks.onRoleSelected(role) }
         roleButtons[role] = button
         row.addView(button)
@@ -174,6 +212,9 @@ class ConfigToolbarView(
         button.setPadding(dp(6), dp(2), dp(6), dp(2))
         button.minimumWidth = 0
         button.minWidth = 0
+        // Finger-sized targets: the toolbar sits over live UI the user is also using.
+        button.minimumHeight = dp(44)
+        button.minHeight = dp(44)
         button.setOnClickListener { onClick() }
         row.addView(button)
         return button
@@ -181,6 +222,32 @@ class ConfigToolbarView(
 
     fun setStatus(text: String) {
         statusView.text = text
+    }
+
+    /** Shows the crop that was just captured, with a one-line description. */
+    fun setTemplatePreview(bitmap: Bitmap, label: String) {
+        previewImage.setImageBitmap(scaleToFit(bitmap))
+        previewLabel.text = label
+        previewRow.visibility = VISIBLE
+    }
+
+    fun clearTemplatePreview() {
+        previewImage.setImageDrawable(null)
+        previewRow.visibility = GONE
+    }
+
+    /** Keeps tall templates from eating the toolbar; keeps wide ones from running off. */
+    private fun scaleToFit(bitmap: Bitmap): Bitmap {
+        val maxWidth = dp(240)
+        val maxHeight = dp(80)
+        if (bitmap.width <= maxWidth && bitmap.height <= maxHeight) return bitmap
+        val scale = minOf(
+            maxWidth.toFloat() / bitmap.width,
+            maxHeight.toFloat() / bitmap.height,
+        )
+        val width = (bitmap.width * scale).toInt().coerceAtLeast(1)
+        val height = (bitmap.height * scale).toInt().coerceAtLeast(1)
+        return Bitmap.createScaledBitmap(bitmap, width, height, true)
     }
 
     /**

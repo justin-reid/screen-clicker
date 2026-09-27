@@ -38,6 +38,14 @@ data class PxRect(
         return PxRect(l, t, maxOf(l, r), maxOf(t, b))
     }
 
+    /** Smallest rect containing both — used to convert one screen region once. */
+    fun union(other: PxRect): PxRect = PxRect(
+        minOf(left, other.left),
+        minOf(top, other.top),
+        maxOf(right, other.right),
+        maxOf(bottom, other.bottom),
+    )
+
     /**
      * Shrunk by [fraction] of the smaller dimension on every side — the safety margin
      * used before picking a random tap point, so a tap can never land on the rect edge.

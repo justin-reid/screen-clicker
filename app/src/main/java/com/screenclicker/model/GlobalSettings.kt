@@ -19,4 +19,6 @@ data class GlobalSettings(
     val scanIntervalMs: Long = 500,
     /** Capture backend: see [com.screenclicker.capture.Capturers]. */
     val captureBackend: String = "auto",
+    /** Show the floating control panel, so scripts run without opening the app. */
+    val controlPanelEnabled: Boolean = false,
 )

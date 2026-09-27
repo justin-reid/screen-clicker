@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -19,6 +20,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
 import com.screenclicker.capture.CaptureProjectionService
+import com.screenclicker.overlay.ControlPanelService
 import com.screenclicker.store.ScriptStore
 import com.screenclicker.store.SettingsRepo
 import com.screenclicker.ui.Screen
@@ -54,6 +56,11 @@ class MainActivity : ComponentActivity() {
         store = ScriptStore(this)
         settingsRepo = SettingsRepo(this)
         requestNotificationsIfNeeded()
+        // The floating panel, not this activity, is the day-to-day interface: bring it
+        // back on launch if the user had it switched on.
+        if (settingsRepo.load().controlPanelEnabled && Settings.canDrawOverlays(this)) {
+            ControlPanelService.start(this)
+        }
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {

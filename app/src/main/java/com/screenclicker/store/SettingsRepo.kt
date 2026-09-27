@@ -21,6 +21,7 @@ class SettingsRepo(context: Context) {
         showDetections = prefs.getBoolean(KEY_SHOW_DETECTIONS, true),
         scanIntervalMs = prefs.getLong(KEY_SCAN_INTERVAL, 500L),
         captureBackend = prefs.getString(KEY_BACKEND, "auto").orEmpty().ifBlank { "auto" },
+        controlPanelEnabled = prefs.getBoolean(KEY_CONTROL_PANEL, false),
     )
 
     fun save(settings: GlobalSettings) {
@@ -32,6 +33,7 @@ class SettingsRepo(context: Context) {
             .putBoolean(KEY_SHOW_DETECTIONS, settings.showDetections)
             .putLong(KEY_SCAN_INTERVAL, settings.scanIntervalMs)
             .putString(KEY_BACKEND, settings.captureBackend)
+            .putBoolean(KEY_CONTROL_PANEL, settings.controlPanelEnabled)
             .apply()
     }
 
@@ -51,5 +53,6 @@ class SettingsRepo(context: Context) {
         const val KEY_SHOW_DETECTIONS = "showDetections"
         const val KEY_SCAN_INTERVAL = "scanIntervalMs"
         const val KEY_BACKEND = "captureBackend"
+        const val KEY_CONTROL_PANEL = "controlPanelEnabled"
     }
 }

@@ -94,12 +94,22 @@ fun RuleEditorScreen(
         }
     }
 
-    // Hot-reload when the overlay saves.
+    // The template file name is deterministic per rule, so writing a new template does
+    // not change any state the preview could key off — this counter forces a re-decode.
+    var templateVersion by remember { mutableStateOf(0) }
+
+    // Hot-reload when the overlay saves. Each value is consumed immediately: a StateFlow
+    // replays its last value to the next collector, which would silently revert edits
+    // made here after that save.
     LaunchedEffect(Unit) {
         ConfigOverlayService.savedRules.collect { saved ->
-            if (saved?.id == ruleId) {
-                rule = saved
-                script = store.list().firstOrNull { it.id == scriptId }
+            if (saved != null) {
+                if (saved.id == ruleId) {
+                    rule = saved
+                    script = store.list().firstOrNull { it.id == scriptId }
+                    templateVersion++
+                }
+                ConfigOverlayService.savedRules.value = null
             }
         }
     }
@@ -108,10 +118,6 @@ fun RuleEditorScreen(
     val editing = rule ?: return
 
     var templateNote by remember { mutableStateOf<String?>(null) }
-
-    // The template file name is deterministic per rule, so writing a new template does
-    // not change any state the preview could key off — this counter forces a re-decode.
-    var templateVersion by remember { mutableStateOf(0) }
 
     fun update(transform: (Rule) -> Rule) {
         val updatedRule = transform(editing)
@@ -467,20 +473,23 @@ private const val DEFAULT_TEMPLATE_MAX = 1_024
 @Composable
 private fun RegionFields(rect: PxRect, onChange: (PxRect) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        // Values are clamped against the opposite edge rather than assigned directly:
+        // an inverted rect is rejected by PxRect, which would crash the screen while the
+        // user is mid-way through typing a number.
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             NumberField("Left", rect.left.toLong(), Modifier.weight(1f)) { v ->
-                onChange(rect.copy(left = v.toInt()))
+                onChange(rect.copy(left = v.toInt().coerceAtMost(rect.right)))
             }
             NumberField("Top", rect.top.toLong(), Modifier.weight(1f)) { v ->
-                onChange(rect.copy(top = v.toInt()))
+                onChange(rect.copy(top = v.toInt().coerceAtMost(rect.bottom)))
             }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             NumberField("Right", rect.right.toLong(), Modifier.weight(1f)) { v ->
-                onChange(rect.copy(right = v.toInt()))
+                onChange(rect.copy(right = v.toInt().coerceAtLeast(rect.left)))
             }
             NumberField("Bottom", rect.bottom.toLong(), Modifier.weight(1f)) { v ->
-                onChange(rect.copy(bottom = v.toInt()))
+                onChange(rect.copy(bottom = v.toInt().coerceAtLeast(rect.top)))
             }
         }
         Text(
@@ -503,7 +512,9 @@ private fun NumberField(
         value = text,
         onValueChange = { new ->
             text = new
-            new.toLongOrNull()?.let(onChange)
+            // Clamped before toInt() by every caller: a pasted overflow would wrap
+            // negative and produce an invalid rect.
+            new.toLongOrNull()?.coerceIn(0L, MAX_FIELD_VALUE)?.let(onChange)
         },
         label = { Text(label) },
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -511,3 +522,6 @@ private fun NumberField(
         modifier = modifier,
     )
 }
+
+/** Generous upper bound for any numeric field; keeps Long -> Int conversions safe. */
+private const val MAX_FIELD_VALUE = 100_000L
