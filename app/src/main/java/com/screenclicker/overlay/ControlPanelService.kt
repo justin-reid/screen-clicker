@@ -74,13 +74,50 @@ class ControlPanelService : Service() {
         fun setMuted(muted: Boolean) {
             instance?.setMutedInternal(muted)
         }
+
+        /**
+         * Hides the panel *and* takes its window out of the touch path while the system
+         * installer is on screen. Hiding alone is not enough: the panel's window has an
+         * explicit size and draws above a normal app's dialog, so a merely hidden panel
+         * would keep swallowing the taps meant for the installer's Update button.
+         */
+        fun setStandDown(standDown: Boolean) {
+            instance?.setStandDownInternal(standDown)
+        }
     }
 
     private var muted = false
+    private var standDown = false
 
     private fun setMutedInternal(value: Boolean) {
         muted = value
-        panelView?.visibility = if (value) View.GONE else View.VISIBLE
+        applyWindowState()
+    }
+
+    private fun setStandDownInternal(value: Boolean) {
+        standDown = value
+        applyWindowState()
+    }
+
+    /**
+     * One place decides whether the panel may be seen and touched: muted while a capture is
+     * in progress, or standing down for the system installer. The flag goes on the *window*,
+     * not just the view, because a GONE view inside a fixed-size window still has a window
+     * to receive touches with.
+     */
+    private fun applyWindowState() {
+        val view = panelView ?: return
+        val hidden = muted || standDown
+        view.visibility = if (hidden) View.GONE else View.VISIBLE
+        val params = params ?: return
+        val flags = if (hidden) {
+            params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        } else {
+            params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+        }
+        if (flags == params.flags) return
+        params.flags = flags
+        runCatching { windowManager.updateViewLayout(view, params) }
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -181,6 +218,8 @@ class ControlPanelService : Service() {
         }
         panelView = view
         params = layoutParams
+        // A panel created while muted or standing down must start out of the way.
+        applyWindowState()
         render()
     }
 

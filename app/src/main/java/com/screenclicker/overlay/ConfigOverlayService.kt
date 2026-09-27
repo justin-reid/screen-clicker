@@ -97,6 +97,19 @@ class ConfigOverlayService : Service() {
         /** Emits the saved Rule whenever the overlay Save button succeeds. */
         val savedRules = MutableStateFlow<Rule?>(null)
 
+        @Volatile
+        private var instance: ConfigOverlayService? = null
+
+        /**
+         * Hides the editor's windows *and* takes them out of the touch path while the system
+         * installer is on screen. A rectangle can cover most of the screen and draws above a
+         * normal app's dialog, so left alone it would swallow the taps meant for the
+         * installer's Update button; hiding the view is not enough, the window keeps its size.
+         */
+        fun setStandDown(standDown: Boolean) {
+            instance?.setStandDownInternal(standDown)
+        }
+
         const val EXTRA_RULE_ID = "ruleId"
     }
 
@@ -115,6 +128,9 @@ class ConfigOverlayService : Service() {
     private var toolbarParams: WindowManager.LayoutParams? = null
     private var toolbarLogicalX = 0
     private var toolbarLogicalY = 0
+
+    /** True while the system installer owns the screen; see [applyWindowState]. */
+    private var standDown = false
 
     private val rects = mutableMapOf<RectBubbleView.Role, PxRect>()
 
@@ -201,6 +217,7 @@ class ConfigOverlayService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
         store = ScriptStore(this)
         settingsRepo = SettingsRepo(this)
         windowManager = getSystemService(WindowManager::class.java)!!
@@ -371,6 +388,7 @@ class ConfigOverlayService : Service() {
             toolbarParams?.let { params ->
                 runCatching { windowManager.removeView(view) }
                 runCatching { windowManager.addView(view, params) }
+                applyWindowState()
             }
         }
     }
@@ -405,6 +423,7 @@ class ConfigOverlayService : Service() {
             return
         }
         bubble = Bubble(view, params)
+        applyWindowState()
     }
 
     private fun removeBubble() {
@@ -507,6 +526,7 @@ class ConfigOverlayService : Service() {
         toolbarParams = params
         toolbarLogicalX = params.x
         toolbarLogicalY = params.y
+        applyWindowState()
     }
 
     private val toolbarCallbacks = object : ConfigToolbarView.Callbacks {
@@ -556,6 +576,33 @@ class ConfigOverlayService : Service() {
         toolbar?.setStatus(text)
     }
 
+    private fun setStandDownInternal(value: Boolean) {
+        if (standDown == value) return
+        standDown = value
+        applyWindowState()
+    }
+
+    /**
+     * One place decides whether the editor's windows may be seen and touched. The flag goes
+     * on the *window*, not just the view, because a GONE view inside a window that has an
+     * explicit size still has that window to receive touches with.
+     */
+    private fun applyWindowState() {
+        val toolbarEntry = toolbar?.let { view -> toolbarParams?.let { params -> view to params } }
+        val bubbleEntry = bubble?.let { it.view to it.params }
+        for ((view, params) in listOfNotNull(toolbarEntry, bubbleEntry)) {
+            view.visibility = if (standDown) View.GONE else View.VISIBLE
+            val flags = if (standDown) {
+                params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+            } else {
+                params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+            }
+            if (flags == params.flags) continue
+            params.flags = flags
+            runCatching { windowManager.updateViewLayout(view, params) }
+        }
+    }
+
     /**
      * Takes one screenshot with the probe visible and locates the marker in it. Returns the
      * capture, or null when capture is unavailable.
@@ -591,7 +638,9 @@ class ConfigOverlayService : Service() {
             // layer would stay hidden with no way back.
             withContext(Dispatchers.Main + NonCancellable) {
                 target?.view?.probeOnly = false
-                toolbar?.visibility = View.VISIBLE
+                // Not "make it visible": standing down for the installer outranks a finished
+                // capture, and applyWindowState knows about both.
+                applyWindowState()
                 ControlPanelService.setMuted(false)
                 ClickerAccessibilityService.setDetectionLayerVisible(true)
             }
@@ -958,6 +1007,7 @@ class ConfigOverlayService : Service() {
         toolbar?.let { runCatching { windowManager.removeView(it) } }
         toolbar = null
         toolbarParams = null
+        if (instance === this) instance = null
         scope.cancel()
         super.onDestroy()
     }

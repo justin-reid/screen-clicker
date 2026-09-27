@@ -22,9 +22,13 @@ import android.view.View
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityManager
 import androidx.core.app.NotificationCompat
+import com.screenclicker.R
 import com.screenclicker.capture.Capturers
 import com.screenclicker.capture.CaptureResult
 import com.screenclicker.engine.ScriptRunner
+import com.screenclicker.overlay.ConfigOverlayService
+import com.screenclicker.overlay.ControlPanelService
+import com.screenclicker.overlay.InstallerWindow
 import com.screenclicker.store.ScriptStore
 import com.screenclicker.store.SettingsRepo
 import com.screenclicker.vision.GrayImage
@@ -172,6 +176,13 @@ class ClickerAccessibilityService : AccessibilityService() {
     private var detectionView: com.screenclicker.overlay.DetectionHighlightView? = null
     private var detectionGeneration = 0
 
+    /**
+     * True while the system's package installer is the window on screen. See
+     * [setInstallerUp] for why that has to change anything.
+     */
+    @Volatile
+    private var installerUp = false
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
@@ -201,10 +212,43 @@ class ClickerAccessibilityService : AccessibilityService() {
         return START_NOT_STICKY
     }
 
-    // Not used for detection; the scan loop drives itself on a timer. We only listen to
-    // window-state events so the system keeps the connection healthy and cheap.
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
+    // Not used for detection; the scan loop drives itself on a timer. Window-state events
+    // are how the service notices *whose* window is in front, which is what lets our
+    // overlays step out of the installer's way (see setInstallerUp).
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        val e = event ?: return
+        if (e.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
+        setInstallerUp(InstallerWindow.isInstaller(e.packageName?.toString()))
+    }
+
     override fun onInterrupt() = Unit
+
+    /**
+     * True while the system is asking the user to install or update something.
+     *
+     * Our overlay windows draw above a normal app's dialog, and the editor's rectangles and
+     * the floating panel also take touches there — a rectangle can cover most of the screen,
+     * so the installer's Update button can end up with every tap landing on our window
+     * instead. The button then does nothing at all, with nothing on screen to explain it.
+     * So while the installer is up: the panel and the editor hide *and* stop taking touches,
+     * the detection layer hides, and taps are refused (a script that kept clicking could tap
+     * the install dialog itself). All of it comes back when the installer goes away.
+     */
+    private fun setInstallerUp(up: Boolean) {
+        if (installerUp == up) return
+        installerUp = up
+        Log.i(
+            TAG,
+            if (up) "installer on screen: overlays stand down, taps refused"
+            else "installer gone: overlays and taps back",
+        )
+        _lastRunnerEvent.value = getString(
+            if (up) R.string.installer_stand_down else R.string.installer_resumed,
+        )
+        ControlPanelService.setStandDown(up)
+        ConfigOverlayService.setStandDown(up)
+        setDetectionLayerVisible(!up)
+    }
 
     /**
      * Starts the scan-and-click loop for one script. Any previous run is stopped first.
@@ -304,6 +348,9 @@ class ClickerAccessibilityService : AccessibilityService() {
         )
         try {
             getSystemService(WindowManager::class.java)!!.addView(view, params)
+            // A run started while the installer is up gets the layer hidden from the start,
+            // not just muted once the installer leaves.
+            view.visibility = if (installerUp) View.INVISIBLE else View.VISIBLE
             detectionView = view
         } catch (e: Exception) {
             Log.w(TAG, "detection overlay unavailable", e)
@@ -427,6 +474,11 @@ class ClickerAccessibilityService : AccessibilityService() {
      * cancelled the gesture.
      */
     suspend fun tap(x: Float, y: Float): Boolean = withContext(Dispatchers.Main) {
+        // Never tap while the installer is on screen: the script's taps would land on the
+        // install dialog, and a stray tap there can cancel the install. The runner treats a
+        // refused gesture as "not now" (it does not burn the rule's interval), so the script
+        // simply resumes when the installer goes away.
+        if (installerUp) return@withContext false
         val path = Path().apply { moveTo(x, y) }
         val stroke = GestureDescription.StrokeDescription(path, 0, TAP_DURATION_MS)
         val gesture = GestureDescription.Builder().addStroke(stroke).build()

@@ -29,6 +29,10 @@
     <string name="overlay_service_off">Screen Clicker\'s accessibility service is OFF. Capturing needs it — enable it in Settings, then come back here.</string>
     <string name="overlay_service_connecting">Accessibility service is enabled but not connected yet. Try Capture again in a moment.</string>
     <string name="overlay_service_connected">Accessibility service connected — capture is ready.</string>
+    <!-- Shown in the floating panel and the runner status while the system's package
+         installer is on screen: our overlays step aside so its buttons can be tapped. -->
+    <string name="installer_stand_down">Installer open — overlays hidden, taps paused</string>
+    <string name="installer_resumed">Installer closed — overlays and taps back</string>
     <string name="overlay_no_area">No area shown — tap Search, Capture or Click above to show it.</string>
     <string name="overlay_show_area_first">Showing the %1$s area — move or resize it, then tap %2$s again.</string>
     <string name="overlay_align_fallback">Capture alignment probe not visible — using the window position instead.</string>
