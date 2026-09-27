@@ -40,11 +40,14 @@ jobs:
         with:
           gradle-version: '8.14.3'
 
+      # The run number, so each published APK is a newer version than the last one, and the
+      # short sha, so the installed app can be matched to the build it came from
+      # (Settings -> Apps -> Screen Clicker -> version).
       - name: Unit tests
-        run: gradle testDebugUnitTest --stacktrace
+        run: gradle testDebugUnitTest -PversionCode=${{ github.run_number }} -PversionNameSuffix=-${{ env.SHORT_SHA }} --stacktrace
 
       - name: Assemble debug APK
-        run: gradle assembleDebug --stacktrace
+        run: gradle assembleDebug -PversionCode=${{ github.run_number }} -PversionNameSuffix=-${{ env.SHORT_SHA }} --stacktrace
 
       # If this fingerprint ever changes, updates stop installing over an existing copy
       # and Android says only "App not installed". Print it so the cause is visible.
@@ -52,6 +55,8 @@ jobs:
         run: |
           APK=$(ls app/build/outputs/apk/debug/*.apk | head -1)
           echo "Built $(basename "$APK")"
+          AAPT2=$(ls -d "$ANDROID_HOME"/build-tools/*/aapt2 | sort -V | tail -1)
+          "$AAPT2" dump badging "$APK" | head -1
           APKSIGNER=$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
           "$APKSIGNER" verify --print-certs "$APK" | grep -i 'SHA-256 digest'
 

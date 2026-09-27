@@ -20,8 +20,13 @@ android {
         applicationId = "com.screenclicker"
         minSdk = 30 // AccessibilityService.takeScreenshot() needs API 30 (Android 11).
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        // CI passes -PversionCode=<run number> and -PversionNameSuffix=-<short sha>, so every
+        // published build is a strictly newer version and says which commit it is. Android
+        // refuses an APK with a lower versionCode, and when an "Update" prompt quietly does
+        // nothing there is otherwise no way to tell on the device whether the file being
+        // installed is even the new build. Local builds stay at 1.
+        versionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 1
+        versionName = "0.1.0" + ((project.findProperty("versionNameSuffix") as String?) ?: "")
     }
 
     signingConfigs {
