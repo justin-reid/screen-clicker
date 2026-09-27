@@ -233,7 +233,7 @@ class CaptureProjectionService : Service() {
 
     suspend fun capture(): CaptureResult {
         if (projection == null) {
-            return CaptureResult.Failure("Screen capture permission is not granted")
+            return CaptureResult.Failure("Screen capture is not granted — grant it in the app")
         }
         // Fast path: a converted frame already exists (newest wins). Only when nothing
         // has ever arrived do we wait for the listener to deliver the first frame.
@@ -338,6 +338,6 @@ class CaptureProjectionService : Service() {
 
         suspend fun capture(): CaptureResult =
             instance?.capture()
-                ?: CaptureResult.Failure("Screen capture permission is not granted")
+                ?: CaptureResult.Failure("Screen capture is not granted — grant it in the app")
     }
 }

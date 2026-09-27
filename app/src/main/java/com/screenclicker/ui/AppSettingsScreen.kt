@@ -178,7 +178,12 @@ private fun CaptureCard(
                 style = MaterialTheme.typography.bodySmall,
             )
             Text(
-                text = if (projectionReady) "Fast capture: granted and running" else "Fast capture: not granted",
+                text = if (projectionReady) {
+                    "Fast capture: running. Stopping a script ends it, so grant it again here " +
+                        "before the next start."
+                } else {
+                    "Fast capture: not granted — press Grant screen capture above to turn it on."
+                },
                 style = MaterialTheme.typography.bodySmall,
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

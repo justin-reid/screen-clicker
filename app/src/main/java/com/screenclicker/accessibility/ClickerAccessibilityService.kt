@@ -24,6 +24,7 @@ import android.view.accessibility.AccessibilityManager
 import androidx.core.app.NotificationCompat
 import com.screenclicker.R
 import com.screenclicker.capture.Capturers
+import com.screenclicker.capture.CaptureProjectionService
 import com.screenclicker.capture.CaptureResult
 import com.screenclicker.engine.ScriptRunner
 import com.screenclicker.overlay.ConfigOverlayService
@@ -35,6 +36,7 @@ import com.screenclicker.vision.GrayImage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -150,7 +152,7 @@ class ClickerAccessibilityService : AccessibilityService() {
         }
 
         fun stopScript() {
-            instance?.endRun()
+            instance?.endRun(releaseCapture = true)
         }
     }
 
@@ -191,14 +193,14 @@ class ClickerAccessibilityService : AccessibilityService() {
 
     override fun onUnbind(intent: Intent?): Boolean {
         if (instance === this) instance = null
-        endRun()
+        endRun(releaseCapture = true)
         Log.i(TAG, "Accessibility service unbound")
         return super.onUnbind(intent)
     }
 
     override fun onDestroy() {
         if (instance === this) instance = null
-        endRun()
+        endRun(releaseCapture = true)
         hideDetectionOverlay(0, force = true)
         serviceScope.cancel()
         super.onDestroy()
@@ -207,7 +209,7 @@ class ClickerAccessibilityService : AccessibilityService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> intent.getStringExtra(EXTRA_SCRIPT_ID)?.let { beginRun(it) }
-            ACTION_STOP -> endRun()
+            ACTION_STOP -> endRun(releaseCapture = true)
         }
         return START_NOT_STICKY
     }
@@ -256,6 +258,8 @@ class ClickerAccessibilityService : AccessibilityService() {
      * dies with the service.
      */
     private fun beginRun(scriptId: String) {
+        // The session is worth keeping across a restart: the run about to start wants the
+        // same capture it just had, and re-granting is a system dialog.
         if (runnerJob?.isActive == true) endRun()
         val context = this
         // The highlight window must be added from the main thread; everything else the
@@ -307,7 +311,9 @@ class ClickerAccessibilityService : AccessibilityService() {
                     foregroundPackage = { foregroundPackage },
                     onTap = { x, y -> tap(x.toFloat(), y.toFloat()) },
                     onDetections = { matches ->
-                        detectionView?.update(matches)
+                        // Generation-guarded: a run that was cancelled but is still finishing
+                        // a scan must not paint its rectangles into a newer run's window.
+                        if (detectionGen == detectionGeneration) detectionView?.update(matches)
                     },
                     onEvent = { message ->
                         Log.i(TAG, "runner: $message")
@@ -326,7 +332,13 @@ class ClickerAccessibilityService : AccessibilityService() {
                     _runningScriptId.value = null
                     cancelRunNotification()
                 }
-                withContext(Dispatchers.Main) { hideDetectionOverlay(detectionGen) }
+                // Reached with the coroutine already cancelled whenever a Stop did the
+                // cancelling, and a plain withContext throws on entry for a cancelled
+                // coroutine — which is how the highlight rectangles used to stay painted on
+                // screen until the app was force-stopped. NonCancellable runs the block
+                // regardless; [endRun] takes the layer down on the spot as well, so this is
+                // the belt to that pair of braces.
+                withContext(Dispatchers.Main + NonCancellable) { hideDetectionOverlay(detectionGen) }
             }
         }
     }
@@ -366,11 +378,29 @@ class ClickerAccessibilityService : AccessibilityService() {
         detectionView = null
     }
 
-    private fun endRun() {
+    /**
+     * Stops the running script and takes down what it left on screen.
+     *
+     * Called from the main thread by every Stop affordance (the floating panel, the app,
+     * the QS tile, the run notification). [releaseCapture] additionally ends the
+     * MediaProjection session: that session is what paints the system's "screen is being
+     * shared" indicator and the capture notification, and it is granted per session — so a
+     * stopped script used to keep sharing the screen (and keep showing match rectangles)
+     * until the user force-stopped the app to get rid of it.
+     *
+     * The detection layer is removed here rather than only from the runner's own finally:
+     * that finally belongs to the coroutine Stop just cancelled.
+     */
+    private fun endRun(releaseCapture: Boolean = false) {
         runnerJob?.cancel()
         runnerJob = null
         _runningScriptId.value = null
         cancelRunNotification()
+        hideDetectionOverlay(0, force = true)
+        if (releaseCapture) {
+            CaptureProjectionService.stop(this)
+            Log.i(TAG, "stop: script, overlays and capture session released")
+        }
     }
 
     private fun showRunNotification(scriptName: String) {
