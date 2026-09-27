@@ -42,6 +42,7 @@ import com.screenclicker.capture.AccessibilityCapture
 import com.screenclicker.capture.CaptureResult
 import com.screenclicker.model.GlobalSettings
 import com.screenclicker.store.SettingsRepo
+import com.screenclicker.ui.CalibrationCard
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -89,13 +90,10 @@ fun AppSettingsScreen(
                 NumberField("Interval for repeat mode (ms)", settings.defaultIntervalMs) { v ->
                     save(settings.copy(defaultIntervalMs = v.coerceAtLeast(0)))
                 }
-                Text(
-                    text = "Reaction-time calibration (measures how fast you would have " +
-                        "tapped, then offers it as the default delay) arrives in M7.",
-                    style = MaterialTheme.typography.bodySmall,
-                )
             }
         }
+
+        CalibrationCard(settingsRepo)
 
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

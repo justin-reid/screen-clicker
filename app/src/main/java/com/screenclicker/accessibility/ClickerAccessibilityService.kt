@@ -7,7 +7,9 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.PixelFormat
 import android.graphics.Path
+import android.view.WindowManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -117,6 +119,14 @@ class ClickerAccessibilityService : AccessibilityService() {
 
     private var runnerJob: Job? = null
 
+    /**
+     * Detection highlights overlay; present only while a script runs with it enabled.
+     * Generations guard a restart race: the old run's finally must not tear down the
+     * new run's window when a script is restarted while already running.
+     */
+    private var detectionView: com.screenclicker.overlay.DetectionHighlightView? = null
+    private var detectionGeneration = 0
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
@@ -133,6 +143,7 @@ class ClickerAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         if (instance === this) instance = null
         endRun()
+        hideDetectionOverlay(0, force = true)
         serviceScope.cancel()
         super.onDestroy()
     }
@@ -170,7 +181,9 @@ class ClickerAccessibilityService : AccessibilityService() {
         }
 
         val runner = ScriptRunner(SettingsRepo(context), AccessibilityCapture())
+        val settings = SettingsRepo(context).load()
         SettingsRepo(context).setLastRunScriptId(scriptId)
+        val detectionGen = if (settings.showDetections) showDetectionOverlay() else -1
         runnerJob = serviceScope.launch {
             _runningScriptId.value = scriptId
             showRunNotification(script.name)
@@ -180,6 +193,9 @@ class ClickerAccessibilityService : AccessibilityService() {
                     templates = templates,
                     foregroundPackage = { foregroundPackage },
                     onTap = { x, y -> tap(x.toFloat(), y.toFloat()) },
+                    onDetections = { matches ->
+                        detectionView?.update(matches)
+                    },
                     onEvent = { Log.i(TAG, "runner: $it") },
                 )
             } catch (e: Exception) {
@@ -189,8 +205,41 @@ class ClickerAccessibilityService : AccessibilityService() {
             } finally {
                 _runningScriptId.value = null
                 cancelRunNotification()
+                hideDetectionOverlay(detectionGen)
             }
         }
+    }
+
+    /** Adds the highlight window (or reuses it) and returns this run's generation. */
+    private fun showDetectionOverlay(): Int {
+        detectionGeneration += 1
+        if (detectionView != null) return detectionGeneration
+        val view = com.screenclicker.overlay.DetectionHighlightView(this)
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT,
+        )
+        try {
+            getSystemService(WindowManager::class.java)!!.addView(view, params)
+            detectionView = view
+        } catch (e: Exception) {
+            Log.w(TAG, "detection overlay unavailable", e)
+        }
+        return detectionGeneration
+    }
+
+    private fun hideDetectionOverlay(generation: Int, force: Boolean = false) {
+        if (!force && generation != detectionGeneration) return
+        detectionView?.let { view ->
+            runCatching { getSystemService(WindowManager::class.java)!!.removeView(view) }
+        }
+        detectionView = null
     }
 
     private fun endRun() {
