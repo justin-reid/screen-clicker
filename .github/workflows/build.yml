@@ -1,0 +1,61 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  debug-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # Downloads all land in the same folder; without this every one of them is
+      # screen-clicker-debug.zip and you cannot tell which commit you installed.
+      - name: Identify this build
+        run: echo "SHORT_SHA=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # Runners are fresh VMs with no ~/.android/debug.keystore, so AGP would mint a
+      # random one per run and every build would be signed by a different key. Android
+      # then refuses to update an installed app and reports only "App not installed".
+      - name: Restore the shared debug signing key
+        env:
+          DEBUG_KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE_B64 }}
+        run: |
+          if [ -z "$DEBUG_KEYSTORE_B64" ]; then
+            echo "::error::DEBUG_KEYSTORE_B64 is not set. Without it this build would be signed with a throwaway key and could not be installed over an existing copy."
+            exit 1
+          fi
+          printf '%s' "$DEBUG_KEYSTORE_B64" | base64 -d > debug.keystore
+          test -s debug.keystore
+
+      # The wrapper jar is not committed, so Gradle itself is pinned here instead.
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.14.3'
+
+      - name: Assemble debug APK
+        run: gradle assembleDebug --stacktrace
+
+      # If this fingerprint ever changes, updates stop installing over an existing copy
+      # and Android says only "App not installed". Print it so the cause is visible.
+      - name: Report signing certificate
+        run: |
+          APK=$(ls app/build/outputs/apk/debug/*.apk | head -1)
+          echo "Built $(basename "$APK")"
+          APKSIGNER=$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          "$APKSIGNER" verify --print-certs "$APK" | grep -i 'SHA-256 digest'
+
+      # Signed with the shared debug key restored above, so this is directly
+      # sideloadable from the workflow run page.
+      - uses: actions/upload-artifact@v5
+        with:
+          name: screen-clicker-${{ env.SHORT_SHA }}
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
