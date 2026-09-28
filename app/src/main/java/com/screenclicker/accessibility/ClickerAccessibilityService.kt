@@ -24,9 +24,12 @@ import android.view.accessibility.AccessibilityManager
 import androidx.core.app.NotificationCompat
 import com.screenclicker.R
 import com.screenclicker.capture.Capturers
+import com.screenclicker.capture.CaptureConsentActivity
 import com.screenclicker.capture.CaptureProjectionService
 import com.screenclicker.capture.CaptureResult
 import com.screenclicker.engine.ScriptRunner
+import com.screenclicker.model.GlobalSettings
+import com.screenclicker.model.Script
 import com.screenclicker.overlay.ConfigOverlayService
 import com.screenclicker.overlay.ControlPanelService
 import com.screenclicker.overlay.InstallerWindow
@@ -147,7 +150,7 @@ class ClickerAccessibilityService : AccessibilityService() {
          */
         fun startScript(context: android.content.Context, scriptId: String): Boolean {
             val service = instance ?: return false
-            service.beginRun(scriptId)
+            service.beginRunWithConsent(scriptId)
             return true
         }
 
@@ -257,6 +260,86 @@ class ClickerAccessibilityService : AccessibilityService() {
      * Templates are decoded once here; the loop then runs on the service scope so it
      * dies with the service.
      */
+    /**
+     * True when the run about to start would use the fast (MediaProjection) capture
+     * while its session is not live — the case that deserves the system's consent
+     * dialog at the moment Play is pressed, instead of silently degrading to the ~1
+     * frame/s accessibility capture or failing once per frame. Rules whose templates
+     * were cropped with the accessibility backend never want the session, whatever the
+     * setting says, so they never trigger a prompt.
+     */
+    private fun wantsFastCapture(settings: GlobalSettings, script: Script): Boolean {
+        val authored = script.authoredBackends()
+        if (authored.size == 1) return authored[0] == Capturers.BACKEND_MEDIA_PROJECTION
+        return settings.captureBackend != Capturers.BACKEND_ACCESSIBILITY
+    }
+
+    /**
+     * True when the script's templates were cropped in the fast capture's space, which
+     * the accessibility screenshot's cannot stand in for (different sizes — a
+     * space-mismatch refusal every frame). A denial for such a script is a refusal to
+     * run, not a silent downgrade.
+     */
+    private fun requiresFastSpace(script: Script): Boolean =
+        script.authoredBackends() == listOf(Capturers.BACKEND_MEDIA_PROJECTION)
+
+    private fun Script.authoredBackends(): List<String> = rules
+        .filter { it.enabled && it.hasTemplate }
+        .map { it.captureBackend }
+        .filter { it.isNotEmpty() }
+        .distinct()
+
+    /**
+     * Starts a run, asking for the screen-capture session first when this script will
+     * need it and the session is not live — the first time we need it, from Play,
+     * wherever it is pressed. Everything a Start does lives in [beginRun]; this
+     * wrapper exists because the consent dialog takes an unknown number of seconds,
+     * so the decision and the wait happen off the main thread.
+     */
+    private fun beginRunWithConsent(scriptId: String) {
+        serviceScope.launch(Dispatchers.Default) {
+            val context = this@ClickerAccessibilityService
+            val settings = SettingsRepo(context).load()
+            val script = ScriptStore(context).list().firstOrNull { it.id == scriptId }
+            if (script != null && wantsFastCapture(settings, script) && !CaptureProjectionService.isReady) {
+                _lastRunnerEvent.value = "Asking for screen capture…"
+                withContext(Dispatchers.Main) { standDownForConsent(true) }
+                val granted = try {
+                    CaptureConsentActivity.request(context)
+                } finally {
+                    // A cancel (Stop pressed while the dialog is up) must still bring the
+                    // overlays back; plain withContext throws on entry for a cancelled
+                    // coroutine, which is how overlays used to get stuck off screen.
+                    withContext(Dispatchers.Main + NonCancellable) { standDownForConsent(false) }
+                }
+                if (!granted && requiresFastSpace(script)) {
+                    Log.w(TAG, "start aborted: fast capture denied, script was authored in its space")
+                    _lastRunnerEvent.value =
+                        "Fast capture denied — '${script.name}' was captured with it, so grant screen capture to run it"
+                    return@launch
+                }
+                if (!granted) {
+                    Log.i(TAG, "fast capture denied; running with the accessibility capture")
+                    _lastRunnerEvent.value = "Fast capture denied — using the accessibility capture (~1 frame/s)"
+                }
+            }
+            withContext(Dispatchers.Main) { beginRun(scriptId) }
+        }
+    }
+
+    /**
+     * Steps the app's overlay windows out of the way while the system's consent dialog
+     * is up. That dialog is an app window, and our TYPE_APPLICATION_OVERLAY windows
+     * draw above app windows and take touches there — the same way they once swallowed
+     * the installer's Update button — so the panel and the editor hide and go
+     * untouchable, exactly as they do while the installer is up.
+     */
+    private fun standDownForConsent(up: Boolean) {
+        ControlPanelService.setConsentUp(up)
+        ConfigOverlayService.setConsentUp(up)
+        setDetectionLayerVisible(!up)
+    }
+
     private fun beginRun(scriptId: String) {
         // The session is worth keeping across a restart: the run about to start wants the
         // same capture it just had, and re-granting is a system dialog.

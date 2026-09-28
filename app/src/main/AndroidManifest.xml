@@ -27,6 +27,19 @@
         </activity>
 
         <!--
+          Invisible trampoline for the system's screen-capture consent dialog: the
+          dialog's result can only reach an Activity, and the panel and the editor are
+          services. Launched from the background (allowed with the overlay permission)
+          the first time a run or a capture needs a session that is not live.
+        -->
+        <activity
+            android:name=".capture.CaptureConsentActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <!--
           The privileged core: reads the screen (canTakeScreenshot) and injects taps
           (dispatchGesture). See res/xml/accessibility_service_config.xml.
         -->

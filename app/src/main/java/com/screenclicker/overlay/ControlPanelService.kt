@@ -84,10 +84,20 @@ class ControlPanelService : Service() {
         fun setStandDown(standDown: Boolean) {
             instance?.setStandDownInternal(standDown)
         }
+
+        /**
+         * The same hide-and-untouch for the system's screen-capture consent dialog, as
+         * an independent flag: the installer watcher and the consent flow can overlap,
+         * and neither should be able to clobber the other's state.
+         */
+        fun setConsentUp(up: Boolean) {
+            instance?.setConsentUpInternal(up)
+        }
     }
 
     private var muted = false
     private var standDown = false
+    private var consentUp = false
 
     private fun setMutedInternal(value: Boolean) {
         muted = value
@@ -99,6 +109,11 @@ class ControlPanelService : Service() {
         applyWindowState()
     }
 
+    private fun setConsentUpInternal(value: Boolean) {
+        consentUp = value
+        applyWindowState()
+    }
+
     /**
      * One place decides whether the panel may be seen and touched: muted while a capture is
      * in progress, or standing down for the system installer. The flag goes on the *window*,
@@ -107,7 +122,7 @@ class ControlPanelService : Service() {
      */
     private fun applyWindowState() {
         val view = panelView ?: return
-        val hidden = muted || standDown
+        val hidden = muted || standDown || consentUp
         view.visibility = if (hidden) View.GONE else View.VISIBLE
         val params = params ?: return
         val flags = if (hidden) {

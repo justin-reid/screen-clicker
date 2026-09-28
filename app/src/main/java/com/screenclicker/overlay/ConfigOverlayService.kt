@@ -22,7 +22,12 @@ import androidx.core.app.ServiceCompat
 import com.screenclicker.R
 import com.screenclicker.accessibility.ClickerAccessibilityService
 import com.screenclicker.capture.CaptureResult
+import com.screenclicker.capture.AccessibilityCapture
+import com.screenclicker.capture.CaptureConsentActivity
+import com.screenclicker.capture.CaptureProjectionService
 import com.screenclicker.capture.Capturers
+import com.screenclicker.capture.MediaProjectionCapture
+import com.screenclicker.capture.ScreenCapturer
 import com.screenclicker.model.ClickMode
 import com.screenclicker.model.PxRect
 import com.screenclicker.model.Rule
@@ -110,6 +115,15 @@ class ConfigOverlayService : Service() {
             instance?.setStandDownInternal(standDown)
         }
 
+        /**
+         * The same hide-and-untouch for the system's screen-capture consent dialog, as
+         * an independent flag: the installer watcher and the consent flow can overlap,
+         * and neither should be able to clobber the other's state.
+         */
+        fun setConsentUp(up: Boolean) {
+            instance?.setConsentUpInternal(up)
+        }
+
         const val EXTRA_RULE_ID = "ruleId"
     }
 
@@ -131,6 +145,9 @@ class ConfigOverlayService : Service() {
 
     /** True while the system installer owns the screen; see [applyWindowState]. */
     private var standDown = false
+
+    /** True while the capture consent dialog is up; see [applyWindowState]. */
+    private var consentUp = false
 
     private val rects = mutableMapOf<RectBubbleView.Role, PxRect>()
 
@@ -582,6 +599,12 @@ class ConfigOverlayService : Service() {
         applyWindowState()
     }
 
+    private fun setConsentUpInternal(value: Boolean) {
+        if (consentUp == value) return
+        consentUp = value
+        applyWindowState()
+    }
+
     /**
      * One place decides whether the editor's windows may be seen and touched. The flag goes
      * on the *window*, not just the view, because a GONE view inside a window that has an
@@ -590,9 +613,10 @@ class ConfigOverlayService : Service() {
     private fun applyWindowState() {
         val toolbarEntry = toolbar?.let { view -> toolbarParams?.let { params -> view to params } }
         val bubbleEntry = bubble?.let { it.view to it.params }
+        val down = standDown || consentUp
         for ((view, params) in listOfNotNull(toolbarEntry, bubbleEntry)) {
-            view.visibility = if (standDown) View.GONE else View.VISIBLE
-            val flags = if (standDown) {
+            view.visibility = if (down) View.GONE else View.VISIBLE
+            val flags = if (down) {
                 params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
             } else {
                 params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
@@ -615,7 +639,7 @@ class ConfigOverlayService : Service() {
         // The same backend chooser the runner uses: the alignment and the template have to be
         // authored in the space the run will see (a mediaProjection mirror and an accessibility
         // screenshot are not interchangeable — see Rule.frameWidth).
-        val capturer = Capturers.pick(settingsRepo.load())
+        val capturer = pickProbeCapturer(target)
         withContext(Dispatchers.Main) {
             toolbar?.visibility = View.INVISIBLE
             ControlPanelService.setMuted(true)
@@ -640,6 +664,60 @@ class ConfigOverlayService : Service() {
                 target?.view?.probeOnly = false
                 // Not "make it visible": standing down for the installer outranks a finished
                 // capture, and applyWindowState knows about both.
+                applyWindowState()
+                ControlPanelService.setMuted(false)
+                ClickerAccessibilityService.setDetectionLayerVisible(true)
+            }
+        }
+    }
+
+    /**
+     * Chooses the backend a probe captures in — the runner's own rule, plus consent.
+     * Prefer the space the rule was authored in, else the settings' choice; when that
+     * is the fast (MediaProjection) backend and its session is not live, this is the
+     * moment to ask for it with the system's dialog, so the first capture works and
+     * every later one starts instantly.
+     */
+    private suspend fun pickProbeCapturer(target: Bubble?): ScreenCapturer {
+        val settings = settingsRepo.load()
+        val authored = rule?.takeIf { it.hasTemplate }?.captureBackend?.takeIf { it.isNotEmpty() }
+        val wantsFast = authored?.let { it == Capturers.BACKEND_MEDIA_PROJECTION }
+            ?: (settings.captureBackend != Capturers.BACKEND_ACCESSIBILITY)
+        if (wantsFast) {
+            if (CaptureProjectionService.isReady) return MediaProjectionCapture()
+            if (requestFastCapture(target)) return MediaProjectionCapture()
+            setStatus("Fast capture denied — capturing with the accessibility backend")
+            return AccessibilityCapture()
+        }
+        if (authored != null) {
+            Capturers.byName(authored)?.let { return it }
+        }
+        return Capturers.pick(settings)
+    }
+
+    /**
+     * Asks for the screen-capture session with the system's own dialog, returning the
+     * user's answer. The dialog is an app window, and our overlay windows draw above
+     * app windows and take touches there (the bug that once swallowed the installer's
+     * Update button), so the editor's windows, the floating panel and the detection
+     * layer all step aside for the duration — the same stand-down the capture itself
+     * uses, done first so the dialog is not covered when it appears.
+     */
+    private suspend fun requestFastCapture(target: Bubble?): Boolean {
+        withContext(Dispatchers.Main) {
+            toolbar?.visibility = View.INVISIBLE
+            ControlPanelService.setMuted(true)
+            ClickerAccessibilityService.setDetectionLayerVisible(false)
+            target?.view?.probeOnly = true
+        }
+        return try {
+            CaptureConsentActivity.request(this)
+        } finally {
+            // NonCancellable: Cancel or a rule switch can destroy the service while the
+            // dialog is up, and plain withContext throws on entry for a cancelled
+            // coroutine — the windows would stay hidden with no way back.
+            withContext(Dispatchers.Main + NonCancellable) {
+                target?.view?.probeOnly = false
                 applyWindowState()
                 ControlPanelService.setMuted(false)
                 ClickerAccessibilityService.setDetectionLayerVisible(true)
