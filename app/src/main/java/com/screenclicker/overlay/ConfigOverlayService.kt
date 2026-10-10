@@ -154,6 +154,8 @@ class ConfigOverlayService : Service() {
     private var rule: Rule? = null
     private var ruleScriptId: String? = null
     private var busy = false
+    /** True when the click-area selector was moved/resized in this editor session. */
+    private var clickRegionEdited = false
 
     // --- alignment, in two coordinate spaces (see the class doc) ---
 
@@ -307,6 +309,9 @@ class ConfigOverlayService : Service() {
     }
 
     private fun initRects() {
+        // This service can be reused when the user opens a different rule from the panel;
+        // click-area edits belong only to the rule whose selector was just initialized.
+        clickRegionEdited = false
         val current = rule ?: return
         ruleAlignX = current.alignX
         ruleAlignY = current.alignY
@@ -486,6 +491,7 @@ class ConfigOverlayService : Service() {
             val updated = applyDrag(before, mode, dx, dy)
             if (updated == before) return
             rects[role] = updated
+            if (role == RectBubbleView.Role.CLICK) clickRegionEdited = true
             applyRectToBubble()
         }
 
@@ -1036,7 +1042,12 @@ class ConfigOverlayService : Service() {
                 if (templateCapturedThisSession) lastFrameHeight else current.frameHeight,
             captureBackend = if (templateCapturedThisSession) lastBackend else current.captureBackend,
         )
-        if (updated.clickMode == ClickMode.ON_REGION) {
+        // Keep click-area selector edits even while the mode is "inside detected image".
+        // Users often draw the area first, then switch the rule's click mode later in the
+        // rule editor; discarding it here made that later switch look like the selector
+        // had not been saved at all. Preserve untouched defaults unless the defined
+        // click-area mode is active.
+        if (updated.clickMode == ClickMode.ON_REGION || clickRegionEdited) {
             updated = updated.copy(clickRegion = rects[RectBubbleView.Role.CLICK] ?: updated.clickRegion)
         }
         val scriptId = ruleScriptId

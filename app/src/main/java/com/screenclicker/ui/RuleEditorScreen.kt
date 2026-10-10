@@ -337,23 +337,29 @@ fun RuleEditorScreen(
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Click", style = MaterialTheme.typography.titleSmall)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     FilterChip(
                         selected = editing.clickMode == ClickMode.ON_IMAGE,
                         onClick = { update { it.copy(clickMode = ClickMode.ON_IMAGE) } },
-                        label = { Text("On the image") },
+                        label = { Text("Click inside detected image", maxLines = 2) },
                     )
                     FilterChip(
                         selected = editing.clickMode == ClickMode.ON_REGION,
                         onClick = { update { it.copy(clickMode = ClickMode.ON_REGION) } },
-                        label = { Text("Elsewhere") },
+                        label = { Text("Click inside defined click area", maxLines = 2) },
                     )
                 }
                 if (editing.clickMode == ClickMode.ON_REGION) {
                     Text(
-                        text = "Click area: where the tap lands when the image is found.",
+                        text = "Choose the area where the tap lands when the image is detected.",
                         style = MaterialTheme.typography.bodySmall,
                     )
+                    if (editing.clickRegion == null) {
+                        Text(
+                            text = "No click area has been saved yet. Define one in the on-screen editor or enter its bounds below.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
                     RegionFields(
                         rect = editing.clickRegion ?: PxRect(0, 0, 0, 0),
                         onChange = { r -> update { it.copy(clickRegion = r) } },
