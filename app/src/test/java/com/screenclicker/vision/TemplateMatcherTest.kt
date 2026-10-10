@@ -71,6 +71,31 @@ class TemplateMatcherTest {
     // ---------------------------------------------------------------- tests
 
     @Test
+    fun `match centers are computed from their top-left and dimensions`() {
+        val match = MatchResult(score = 0.8f, left = 11, top = 17, width = 24, height = 20)
+        assertEquals(23, match.centerX)
+        assertEquals(27, match.centerY)
+    }
+
+    @Test
+    fun `locatability distinguishes structured templates from flat captures`() {
+        assertTrue(TemplateMatcher.isLocatable(noiseImage(24, 20, seed = 37)))
+        assertFalse(TemplateMatcher.isLocatable(GrayImage(24, 20, IntArray(24 * 20) { 120 })))
+    }
+
+    @Test
+    fun `downsample covers factor one and phase anchored box averages`() {
+        val image = GrayImage(4, 4, IntArray(16) { it })
+        assertTrue(image === TemplateMatcher.downsample(image, 1))
+        val reduced = TemplateMatcher.downsample(image, 2)
+        assertEquals(2, reduced.width)
+        assertEquals(2, reduced.height)
+        assertTrue(reduced.pixels.contentEquals(intArrayOf(2, 4, 10, 12)))
+        val shifted = TemplateMatcher.downsample(image, 2, phaseX = 1, phaseY = 1)
+        assertTrue(shifted.pixels.contentEquals(intArrayOf(7)))
+    }
+
+    @Test
     fun `exact template scores one at the right position`() {
         val screen = noiseImage(200, 150, seed = 1)
         val template = patch(screen, 37, 53, 24, 18)
@@ -221,6 +246,25 @@ class TemplateMatcherTest {
     }
 
     @Test
+    fun `high-pass-only second occurrence is found even when another raw match is sharp`() {
+        val width = 300
+        val height = 220
+        val background = GrayImage(width, height, IntArray(width * height) { i ->
+            val x = i % width
+            val y = i / width
+            (128 + 60 * sin(x / 17.0) * sin(y / 23.0)).toInt().coerceIn(0, 255)
+        })
+        val template = noiseImage(40, 30, seed = 43)
+        val exact = blend(background, template, 30, 30, 1.0f)
+        val withFaintCopy = blend(exact, template, 220, 170, 0.25f)
+
+        val outcome = TemplateMatcher.search(withFaintCopy, template, null, 0.90f)
+
+        assertEquals(setOf(30 to 30, 220 to 170), outcome.matches.map { it.left to it.top }.toSet())
+        assertEquals(2, outcome.matches.size)
+    }
+
+    @Test
     fun `a tie between mediocre candidates is not reported as a location`() {
         // Stripes repeat every 20px, so every stripe window fits the (unrelated, low-contrast)
         // template equally well. Nothing here is the image, and the search must say so rather
@@ -237,23 +281,61 @@ class TemplateMatcherTest {
         assertTrue("score ${outcome.best!!.score}", outcome.best!!.score < 0.95f)
         assertEquals(outcome.best!!.score, outcome.runnerUp, 0.001f)
         assertEquals(Confidence.AMBIGUOUS, outcome.confidence)
+        // Confidence warns that one top location is not unique; a caller threshold can still
+        // request and act on every separated occurrence instead of dropping the whole search.
+        val all = TemplateMatcher.search(stripes, texture, null, 0f)
+        assertEquals(Confidence.AMBIGUOUS, all.confidence)
+        assertTrue("multiple threshold-qualified hits: ${all.matches.size}", all.matches.size >= 2)
         assertNull(TemplateMatcher.findBest(stripes, texture, null, 0f))
     }
 
     @Test
-    fun `a tie between exact high-scoring copies is ambiguous`() {
+    fun `exact high-scoring copies are returned as separate matches, not rejected as ambiguous`() {
         val screen = noiseImage(240, 180, seed = 19)
         val template = patch(screen, 24, 28, 32, 24)
-        // Both locations are exact copies. A 99%-plus score cannot tell which one the user
-        // meant, so the runner must not choose one just because the score is high.
         val duplicated = paste(screen, template, 164, 128)
-        val outcome = TemplateMatcher.search(duplicated, template, null)
+        val outcome = TemplateMatcher.search(duplicated, template, null, 0.99f)
 
         assertNotNull(outcome.best)
         assertTrue("winner ${outcome.best!!.score}", outcome.best!!.score >= 0.99f)
         assertTrue("runner-up ${outcome.runnerUp}", outcome.runnerUp >= 0.99f)
-        assertEquals(Confidence.AMBIGUOUS, outcome.confidence)
-        assertNull(TemplateMatcher.findBest(duplicated, template, null, 0f))
+        assertEquals(Confidence.SHARP, outcome.confidence)
+        assertEquals(2, outcome.matches.size)
+        assertEquals(setOf(24 to 28, 164 to 128), outcome.matches.map { it.left to it.top }.toSet())
+        assertNotNull(TemplateMatcher.findBest(duplicated, template, null, 0.99f))
+    }
+
+    @Test
+    fun `every repeated high-score grid occurrence is returned through the coarse path`() {
+        val screen = noiseImage(480, 420, seed = 31)
+        val template = patch(screen, 10, 10, 24, 20)
+        val expected = buildSet {
+            for (row in 0 until 4) for (column in 0 until 4) {
+                add(18 + column * 105 to 16 + row * 90)
+            }
+        }
+        var grid = screen
+        for ((left, top) in expected) grid = paste(grid, template, left, top)
+
+        val outcome = TemplateMatcher.search(grid, template, null, 0.99f)
+
+        assertEquals(Confidence.SHARP, outcome.confidence)
+        assertEquals(expected, outcome.matches.map { it.left to it.top }.toSet())
+        assertEquals(16, outcome.matches.size)
+    }
+
+    @Test
+    fun `threshold is applied independently to every occurrence`() {
+        val screen = noiseImage(240, 180, seed = 41)
+        val template = patch(screen, 20, 20, 24, 20)
+        val exact = paste(screen, template, 20, 20)
+        val withWeakerCopy = blend(exact, template, 150, 100, 0.55f)
+
+        val outcome = TemplateMatcher.search(withWeakerCopy, template, null, 0.90f)
+
+        assertEquals(setOf(20 to 20), outcome.matches.map { it.left to it.top }.toSet())
+        assertEquals(1, outcome.matches.size)
+        assertTrue(outcome.best!!.score >= 0.90f)
     }
 
     @Test

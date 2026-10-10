@@ -9,7 +9,6 @@ import com.screenclicker.model.ClickMode
 import com.screenclicker.model.PxRect
 import com.screenclicker.model.Rule
 import com.screenclicker.model.Script
-import com.screenclicker.store.SettingsRepo
 import com.screenclicker.vision.GrayImage
 import com.screenclicker.vision.Confidence
 import com.screenclicker.vision.MatchResult
@@ -20,14 +19,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlin.math.max
 import kotlin.random.Random
-
-/** Whether a search result is safe and sufficiently strong for this rule's click destination. */
-internal fun SearchOutcome.isActionableFor(rule: Rule): Boolean {
-    val match = best ?: return false
-    if (match.score < rule.threshold) return false
-    if (confidence == Confidence.SHARP) return true
-    return confidence == Confidence.AMBIGUOUS && rule.hasDefinedClickArea()
-}
 
 internal fun Rule.hasDefinedClickArea(): Boolean =
     clickMode == ClickMode.ON_REGION &&
@@ -48,10 +39,12 @@ internal fun Rule.hasDefinedClickArea(): Boolean =
  * injected, which keeps the timing logic readable and testable.
  */
 class ScriptRunner(
-    private val settingsRepo: SettingsRepo,
+    private val loadSettings: () -> com.screenclicker.model.GlobalSettings,
     private val capturer: ScreenCapturer,
+    private val elapsedRealtime: () -> Long = { SystemClock.elapsedRealtime() },
+    private val wait: suspend (Long) -> Unit = { delay(it) },
+    private val writeLog: (String) -> Unit = { Log.i(TAG, it) },
 ) {
-
     /**
      * Per-rule runtime state for cadence decisions; survives across frames only.
      *
@@ -60,8 +53,8 @@ class ScriptRunner(
      * an extra click (or block one for hours).
      */
     private class RuleState {
-        var wasPresent: Boolean = false
-        var lastClickAt: Long = 0L
+        var previousMatches: List<MatchResult> = emptyList()
+        val lastClickAtByLocation = mutableMapOf<Pair<Int, Int>, Long>()
     }
 
     data class Hit(val rule: Rule, val match: MatchResult)
@@ -94,13 +87,13 @@ class ScriptRunner(
         // was overwritten by the next scan line before users could read whether a tap ran.
         var lastTapOutcome: String? = null
         while (currentCoroutineContext().isActive) {
-            val frameStarted = SystemClock.elapsedRealtime()
-            val settings = settingsRepo.load()
+            val frameStarted = elapsedRealtime()
+            val settings = loadSettings()
 
             // Optional app binding: pause scanning while another app is foreground.
             val target = script.targetPackage
             if (target != null && foregroundPackage() != target) {
-                delay(500)
+                wait(500)
                 continue
             }
 
@@ -112,7 +105,7 @@ class ScriptRunner(
 
                 is CaptureResult.Failure -> {
                     onEvent("Capture failed: ${capture.reason}")
-                    delay(1_500)
+                    wait(1_500)
                     continue
                 }
             }
@@ -188,7 +181,7 @@ class ScriptRunner(
                 }
             }
             val union = regions.values.reduceOrNull { a, b -> a.union(b) }
-            val matches = HashMap<String, MatchResult>()
+            val matches = HashMap<String, List<MatchResult>>()
             // Every rule's search this frame, kept whole: a bare score cannot tell a find from a
             // tie between two bland patches, and that distinction is what decides whether a
             // highlight is drawn and where a tap goes.
@@ -213,27 +206,23 @@ class ScriptRunner(
                         region.bottom - union.top,
                     )
                     val matchStarted = System.currentTimeMillis()
-                    // No threshold here: the scan is identical either way, so this reports the
-                    // score that was always being computed and the rule's own threshold is
-                    // applied below.
-                    val outcome = TemplateMatcher.search(scan, template, local)
+                    // The threshold is applied by the matcher to every separated occurrence.
+                    // Repeated grid items are all real hits; neither a score tie nor a fixed
+                    // click-area destination collapses them into one arbitrary location.
+                    val outcome = TemplateMatcher.search(scan, template, local, rule.threshold)
                     matchMs += System.currentTimeMillis() - matchStarted
                     outcomes[rule.id] = outcome
-                    val best = outcome.best
-                    // A tie makes image-click location ambiguous, but a fixed click area only
-                    // needs evidence that the target is present somewhere in the search region.
-                    if (outcome.isActionableFor(rule) && best != null) {
-                        matches[rule.id] = best.copy(
-                            left = best.left + union.left,
-                            top = best.top + union.top,
-                        )
+                    if (outcome.matches.isNotEmpty()) {
+                        matches[rule.id] = outcome.matches.map { match ->
+                            match.copy(left = match.left + union.left, top = match.top + union.top)
+                        }
                     }
                 }
             }
 
             // Periodic timing so the user can see where the scan budget goes.
-            if (SystemClock.elapsedRealtime() - lastStatsAt >= STATS_INTERVAL_MS) {
-                lastStatsAt = SystemClock.elapsedRealtime()
+            if (elapsedRealtime() - lastStatsAt >= STATS_INTERVAL_MS) {
+                lastStatsAt = elapsedRealtime()
                 val scanMs = captureMs + grayMs + matchMs
                 val highlightOffsets = enabledRules.joinToString { rule ->
                     "${rule.name}(${rule.tapAlignX - rule.alignX}," +
@@ -253,32 +242,48 @@ class ScriptRunner(
 
             // Cadence decisions, then update presence tracking for every rule.
             val hits = mutableListOf<Hit>()
-            val now = SystemClock.elapsedRealtime()
+            val now = elapsedRealtime()
             for (rule in enabledRules) {
                 val state = states.getOrPut(rule.id) { RuleState() }
-                val present = matches.containsKey(rule.id)
-                val mayClick = when (rule.cadence) {
-                    Cadence.ONCE_PER_APPEARANCE -> present && !state.wasPresent
-                    Cadence.REPEAT_WHILE_VISIBLE ->
-                        present && now - state.lastClickAt >= rule.intervalMs
+                val present = matches[rule.id].orEmpty()
+                when (rule.cadence) {
+                    Cadence.ONCE_PER_APPEARANCE -> {
+                        for (match in present) {
+                            if (state.previousMatches.none { sameOccurrence(it, match) }) {
+                                hits += Hit(rule, match)
+                            }
+                        }
+                    }
+                    Cadence.REPEAT_WHILE_VISIBLE -> {
+                        for (match in present) {
+                            val lastClick = state.lastClickAtByLocation.entries
+                                .firstOrNull { (location, _) -> sameOccurrence(location, match) }
+                                ?.value
+                            if (lastClick == null || now - lastClick >= rule.intervalMs) {
+                                hits += Hit(rule, match)
+                            }
+                        }
+                        val retained = present.mapNotNull { match ->
+                            state.lastClickAtByLocation.entries
+                                .firstOrNull { (location, _) -> sameOccurrence(location, match) }
+                                ?.let { (match.left to match.top) to it.value }
+                        }.toMap()
+                        state.lastClickAtByLocation.clear()
+                        state.lastClickAtByLocation.putAll(retained)
+                    }
                 }
-                // lastClickAt is stamped only once a tap actually lands, below: a
-                // refused gesture should not burn the rule's whole interval.
-                if (mayClick) hits += Hit(rule, matches[rule.id]!!)
-                state.wasPresent = present
+                state.previousMatches = present
             }
 
             // The highlight window draws in display space and matches are in screenshot
             // space (see clickBounds); the two are the same on most devices, and this shows
             // a shifted box when they are not — rather than a box that silently lies.
             onDetections(
-                matches.mapNotNull { (ruleId, match) ->
-                    // An ambiguous location may still establish presence for a fixed click
-                    // area, but drawing its arbitrary top candidate as the detected image
-                    // would make the highlight falsely precise.
-                    if (outcomes[ruleId]?.confidence != Confidence.SHARP) return@mapNotNull null
+                matches.flatMap { (ruleId, occurrences) ->
                     val rule = rulesById.getValue(ruleId)
-                    match.translated(rule.tapAlignX - rule.alignX, rule.tapAlignY - rule.alignY)
+                    occurrences.map { match ->
+                        match.translated(rule.tapAlignX - rule.alignX, rule.tapAlignY - rule.alignY)
+                    }
                 },
             )
 
@@ -290,23 +295,23 @@ class ScriptRunner(
                 } else {
                     0L
                 }
-                val wait = max(0L, hit.rule.delayMs + jitter)
-                delay(wait)
+                val waitMs = max(0L, hit.rule.delayMs + jitter)
+                wait(waitMs)
                 val (x, y) = bounds.randomPoint(rng)
                 val landed = onTap(x, y)
-                if (landed) {
-                    states[hit.rule.id]?.lastClickAt = SystemClock.elapsedRealtime()
-                } else if (hit.rule.cadence == Cadence.ONCE_PER_APPEARANCE) {
-                    // A refused/cancelled gesture did not act on this appearance; leave the
-                    // edge unconsumed so the runner can retry instead of silently giving up.
-                    states[hit.rule.id]?.wasPresent = false
+                val state = states[hit.rule.id]
+                if (landed && hit.rule.cadence == Cadence.REPEAT_WHILE_VISIBLE) {
+                    state?.lastClickAtByLocation?.set(hit.match.left to hit.match.top, elapsedRealtime())
+                } else if (!landed && hit.rule.cadence == Cadence.ONCE_PER_APPEARANCE) {
+                    // A refused/cancelled gesture did not act on this occurrence; leave its
+                    // edge unconsumed so it retries without re-clicking other found instances.
+                    state?.previousMatches = state.previousMatches.filterNot { sameOccurrence(it, hit.match) }
                 }
                 val destination = if (hit.rule.hasDefinedClickArea()) "area" else "match"
                 val tapOutcome = "${hit.rule.name}: $destination bounds=$bounds tap=($x,$y), " +
                     if (landed) "gesture completed" else "gesture cancelled"
                 lastTapOutcome = tapOutcome
-                Log.i(
-                    TAG,
+                writeLog(
                     "rule='${hit.rule.name}' score=${"%.2f".format(hit.match.score)} " +
                         "destination=$destination bounds=$bounds tap=($x,$y) completed=$landed",
                 )
@@ -314,23 +319,31 @@ class ScriptRunner(
             }
 
             // Hold the scan cadence.
-            val elapsed = SystemClock.elapsedRealtime() - frameStarted
-            delay((settings.scanIntervalMs - elapsed).coerceAtLeast(0))
+            val elapsed = elapsedRealtime() - frameStarted
+            wait((settings.scanIntervalMs - elapsed).coerceAtLeast(0))
         }
         onEvent("Stopped")
     }
 
     /**
-     * The bounds a tap may land in for this rule's hit.
-     *
-     * Two coordinate spaces meet here. Matching runs in *screenshot* space, so the search
-     * region carries the editor's measured [Rule.alignX]. Taps are injected and highlights
-     * drawn in *display* space, whose correction is [Rule.tapAlignX]. On any device where a
-     * screenshot is the display pixel for pixel the two are equal; where they are not (a
-     * screenshot smaller than the display), using one for both would put every tap out by
-     * the difference.
+     * Occurrence identity is the match location with the same separation used by the matcher.
      */
+    private fun sameOccurrence(a: MatchResult, b: MatchResult): Boolean {
+        val separation = max(8, minOf(a.width, a.height, b.width, b.height) / 2)
+        return kotlin.math.abs(a.left - b.left) < separation &&
+            kotlin.math.abs(a.top - b.top) < separation
+    }
 
+    private fun sameOccurrence(location: Pair<Int, Int>, match: MatchResult): Boolean =
+        sameOccurrence(
+            MatchResult(0f, location.first, location.second, match.width, match.height),
+            match,
+        )
+
+    /**
+     * Tap bounds are either this occurrence in display coordinates or the rule's shared
+     * configured click area. The match and configured area use different alignment offsets.
+     */
     private fun clickBounds(rule: Rule, match: MatchResult): PxRect {
         val matchBounds = PxRect(
             match.left,
@@ -354,10 +367,8 @@ class ScriptRunner(
     /**
      * " name 87%" per rule, in rule order; ids keep same-named rules from collapsing.
      *
-     * A score that could not be acted on says why instead of showing a number that looks like
-     * a find: a template with nothing in it, a frame where nothing scored, or two candidates so
-     * close that which one is *the* image cannot be told. The last case is what a highlight
-     * drawn beside the image instead of on it looks like, and it is not a threshold problem.
+     * Scores and runner-up are diagnostics; click/highlight behavior consumes every match
+     * at or above the rule threshold. Multiple occurrences are expected.
      */
     private fun logOutcomes(
         outcomes: Map<String, SearchOutcome>,
@@ -373,7 +384,10 @@ class ScriptRunner(
             outcome.confidence == Confidence.NO_CONTRAST -> " $name: template has no contrast"
             best == null -> " $name: nothing found"
             outcome.confidence == Confidence.AMBIGUOUS ->
-                " $name ${percent(best.score)} (2nd ${percent(second)}, ambiguous)$via"
+                " $name ${percent(best.score)} (2nd ${percent(second)}, close scores; " +
+                    "${outcome.matches.size} hit(s))$via"
+            outcome.matches.size > 1 ->
+                " $name ${percent(best.score)} (${outcome.matches.size} hits)$via"
             second >= best.score - 0.10f -> " $name ${percent(best.score)} (2nd ${percent(second)})$via"
             else -> " $name ${percent(best.score)}$via"
         }

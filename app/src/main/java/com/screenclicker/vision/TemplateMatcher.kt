@@ -22,10 +22,10 @@ data class MatchResult(
 
 /** How far a result can be trusted by a caller that has to draw or tap something. */
 enum class Confidence {
-    /** One window clearly wins: act on it. */
+    /** A strong result; separated qualifying occurrences are returned individually. */
     SHARP,
 
-    /** Several windows score alike, so the winner is not reliably *the* image. */
+    /** Mediocre near-ties are diagnostic only; threshold-qualified occurrences remain available. */
     AMBIGUOUS,
 
     /** The template itself has no structure, so nothing can be located with it. */
@@ -48,6 +48,8 @@ data class SearchOutcome(
     /** Best score at least one minimum separation away from [best]; [NO_RUNNER_UP] if none. */
     val runnerUp: Float,
     val confidence: Confidence,
+    /** Every separated occurrence whose score met the caller's threshold, in score order. */
+    val matches: List<MatchResult> = emptyList(),
 ) {
     companion object {
         const val NO_RUNNER_UP = -1f
@@ -74,11 +76,10 @@ data class SearchOutcome(
  *  - the reduction factor is chosen as large as the template can stand (its coarse copy must
  *    still be at least [MIN_COARSE_SIDE] pixels across), because the whole cost of the coarse
  *    pass falls with the fourth power of that factor;
- *  - it keeps the few best *separated* coarse winners rather than only the top one, because a
- *    blurred decoy can outrank the real (possibly faded) target, and refining a handful of
- *    windows costs almost nothing;
- *  - the coarse winner is then re-scored at full resolution in a small window, so the position
- *    and the score that get reported are exact pixels.
+ *  - it keeps all separated coarse peaks that could meet the caller's score threshold, because
+ *    repeated targets are valid independent hits;
+ *  - each coarse peak is then re-scored at full resolution in a small window, so positions and
+ *    scores are exact pixels.
  *
  * The coarse pass correlates a *single* box-filtered screen against all four phase variants of
  * the template (box starting at each of the 2x2 sub-offsets). Box filtering is anchored to the
@@ -94,9 +95,8 @@ data class SearchOutcome(
  *  - a window must carry its own contrast, relative to the template's (see
  *    [CONTRAST_FRACTION]) — a flat window has no structure, so any correlation it shows is
  *    curve-fitting noise;
- *  - a runner-up within [AMBIGUITY_MARGIN] of the winner is reported as ambiguous regardless
- *    of the absolute score: two exact copies are still two possible locations, and "which of
- *    these two spots" is not a question the caller can answer.
+ *  - a runner-up within [AMBIGUITY_MARGIN] of a *mediocre* winner is reported as ambiguous;
+ *    multiple high-scoring separated locations are returned as multiple matches, not a tie.
  *
  * Fades need a second body of evidence. Alpha-blending the image with a *flat* background
  * is an affine change of the template and plain ZNCC is invariant to it; alpha-blending with
@@ -152,12 +152,9 @@ object TemplateMatcher {
     private const val MAX_COARSE_FACTOR = 8
 
     /**
-     * Coarse winners refined at full resolution; the extras feed the ambiguity check.
-     *
-     * More than a handful because a *faded* target is exactly the one the coarse ranking
-     * buries: its box-filtered contrast is a fraction of the template's, and a coarse decoy
-     * can outscore it. Refining an extra window costs one small scan, which is cheap; a
-     * buried target costs the whole find.
+     * A coarse score floor keeps obviously unrelated windows out; each separated possible hit
+     * above the floor is refined so a repeated grid occurrence is not lost behind a top-N cap.
+     * Fades use a lower coarse floor and the independent high-pass evidence pass.
      */
     private const val COARSE_CANDIDATES = 12
 
@@ -197,9 +194,8 @@ object TemplateMatcher {
     private const val AMBIGUITY_MARGIN = 0.05f
 
     /**
-     * Best match of [template] inside [region], or null when the search cannot say where the
-     * image is at all: nothing scored [minScore], the find was ambiguous, or the template has
-     * no contrast to locate with.
+     * Highest-scoring match of [template] inside [region], or null when no confident single
+     * location meets [minScore]. Use [search] when every qualifying occurrence is needed.
      */
     fun findBest(
         screen: GrayImage,
@@ -207,7 +203,7 @@ object TemplateMatcher {
         region: PxRect?,
         minScore: Float,
     ): MatchResult? {
-        val outcome = search(screen, template, region)
+        val outcome = search(screen, template, region, minScore)
         if (outcome.confidence != Confidence.SHARP) return null
         return outcome.best?.takeIf { it.score >= minScore }
     }
@@ -227,6 +223,8 @@ object TemplateMatcher {
         screen: GrayImage,
         template: GrayImage,
         region: PxRect?,
+        /** All separated results at or above this value are returned in [SearchOutcome.matches]. */
+        minimumScore: Float = Float.POSITIVE_INFINITY,
     ): SearchOutcome {
         val left = max(0, region?.left ?: 0)
         val top = max(0, region?.top ?: 0)
@@ -250,44 +248,40 @@ object TemplateMatcher {
         // Windows closer than this are the same find, not two: half a template apart is
         // already a visibly different spot, and inside it they overlap the same object.
         val separation = max(8, min(template.width, template.height) / 2)
-        val refined = Candidates(limit = 2, separation = separation)
+        val refined = Candidates(limit = 2, separation = separation, occurrenceThreshold = minimumScore)
 
         val factor = coarseFactor(template, relXMax, relYMax)
         val edge = edgePass(screen, template, bounds, factor)
 
-        // The windows full-resolution scoring happens in: the whole candidate range for a
-        // small template, one small neighbourhood per coarse winner otherwise. The coarse
-        // ranking itself runs twice — on the raw screen and on its high-passed copy: a faded
-        // target's coarse contrast is a fraction of the template's while the background's is
-        // undiminished, so the raw ranking can bury the true position under decoys exactly
-        // when the image is faintest; high-passed, the background washes out and the
-        // target's edges still lead. Seeds from both are merged and refined together.
-        val windows: List<RelWindow> = if (factor == 0) {
-            // Too small to survive a box filter: exhaustive full-resolution scan. Cheap,
-            // because a tiny template has few pixels per candidate position.
+        // Refine every plausible coarse occurrence, not only the top-N. Keep raw and
+        // high-pass seeds separate so one sharp hit cannot hide a second faint occurrence.
+        val rawSeeds = if (factor == 0) {
+            emptyList()
+        } else {
+            coarseSeeds(screen, template, 0, 0, bounds, relXMax, relYMax, factor, separation, minimumScore)
+        }
+        val edgeSeedFactor = max(1, factor)
+        val edgeSeeds = edge?.let {
+            coarseSeeds(
+                it.screen, it.template, it.offsetX, it.offsetY,
+                bounds, relXMax, relYMax, edgeSeedFactor, separation, minimumScore,
+            )
+        }.orEmpty()
+        val allSeeds = Candidates(
+            limit = 2, separation = separation, occurrenceThreshold = Float.NEGATIVE_INFINITY,
+        )
+        (rawSeeds + edgeSeeds).forEach(allSeeds::offer)
+        val windows = if (factor == 0) {
+            // Small templates are cheap enough to scan exhaustively at full resolution.
             listOf(RelWindow(0, 0, relXMax, relYMax))
         } else {
-            val seeds = Candidates(limit = COARSE_CANDIDATES, separation = separation)
-            coarseSeeds(
-                screen, template, 0, 0, bounds, relXMax, relYMax, factor, separation,
-            ).forEach(seeds::offer)
-            edge?.let {
-                coarseSeeds(
-                    it.screen, it.template, it.offsetX, it.offsetY,
-                    bounds, relXMax, relYMax, factor, separation,
-                ).forEach(seeds::offer)
-            }
-            val radius = refineRadius(factor)
-            seeds.items.map { seed ->
-                val approxRelX = (seed.left - bounds.left).coerceIn(0, relXMax)
-                val approxRelY = (seed.top - bounds.top).coerceIn(0, relYMax)
-                RelWindow(
-                    max(0, approxRelX - radius),
-                    max(0, approxRelY - radius),
-                    min(relXMax, approxRelX + radius),
-                    min(relYMax, approxRelY + radius),
-                )
-            }
+            allSeeds.matches.map { seed -> refineWindow(seed, bounds, relXMax, relYMax, factor) }
+        }
+        val distinctEdgeSeeds = Candidates(
+            limit = 2, separation = separation, occurrenceThreshold = Float.NEGATIVE_INFINITY,
+        ).apply { edgeSeeds.forEach(::offer) }.matches
+        val edgeWindows = distinctEdgeSeeds.map {
+            it to refineWindow(it, bounds, relXMax, relYMax, edgeSeedFactor)
         }
 
         val integrals = Integrals(screen, bounds)
@@ -298,17 +292,23 @@ object TemplateMatcher {
             )
         }
 
-        // Plain ZNCC is confident about an unfaded target, so the second pass only re-scores
-        // when the best raw score is low or absent. A close runner-up is handled as ambiguity
-        // after scoring; high-pass evidence cannot make two exact copies one location.
+        // If a raw candidate already meets threshold, it needs no high-pass rescue. When the
+        // frame has another strong hit, still refine high-pass-only seeds so a separate faint
+        // occurrence is not hidden by the frame-wide raw best score.
         val rawBest = refined.best
-        if (rawBest == null || rawBest.score < CONFIDENT_SCORE) {
+        val hpWindows = if (rawBest == null || rawBest.score < CONFIDENT_SCORE) {
+            windows
+        } else {
+            edgeWindows.filter { (seed, _) -> !refined.hasOccurrenceNear(seed) }
+                .map { it.second }
+        }
+        if (hpWindows.isNotEmpty()) {
             edge?.let {
                 // The hp refine scores the template's interior, whose top-left sits [r]
                 // pixels in from the window's; shifting the window by +r and the offer back
                 // by −r keeps the reported rectangle the full template's.
                 val r = HIGH_PASS_RADIUS
-                for (w in windows) {
+                for (w in hpWindows) {
                     scan(
                         it.screen, it.refineTemplate, it.bounds, it.integrals, refined,
                         RelWindow(w.relXMin + r, w.relYMin + r, w.relXMax + r, w.relYMax + r),
@@ -325,12 +325,14 @@ object TemplateMatcher {
 
         val best = refined.best ?: return notFound()
         val runnerUp = refined.runnerUpScore
-        val ambiguous = runnerUp != SearchOutcome.NO_RUNNER_UP &&
+        val ambiguous = best.score < CONFIDENT_SCORE &&
+            runnerUp != SearchOutcome.NO_RUNNER_UP &&
             runnerUp >= best.score - AMBIGUITY_MARGIN
         return SearchOutcome(
             best = best,
             runnerUp = runnerUp,
             confidence = if (ambiguous) Confidence.AMBIGUOUS else Confidence.SHARP,
+            matches = refined.matches,
         )
     }
 
@@ -475,6 +477,24 @@ object TemplateMatcher {
      * floor (where the numbers mean something) is applied in [scan] instead. A coarse decoy is
      * harmless — it only costs one small refine pass, and the full-res score decides.
      */
+    private fun refineWindow(
+        seed: MatchResult,
+        bounds: PxRect,
+        relXMax: Int,
+        relYMax: Int,
+        factor: Int,
+    ): RelWindow {
+        val radius = refineRadius(factor)
+        val approxRelX = (seed.left - bounds.left).coerceIn(0, relXMax)
+        val approxRelY = (seed.top - bounds.top).coerceIn(0, relYMax)
+        return RelWindow(
+            max(0, approxRelX - radius),
+            max(0, approxRelY - radius),
+            min(relXMax, approxRelX + radius),
+            min(relYMax, approxRelY + radius),
+        )
+    }
+
     private fun coarseSeeds(
         screen: GrayImage,
         template: GrayImage,
@@ -485,6 +505,7 @@ object TemplateMatcher {
         relYMax: Int,
         factor: Int,
         separation: Int,
+        minimumScore: Float,
     ): List<MatchResult> {
         // [screen] may be a crop of the real one (the high-passed copy), so everything here
         // works in its coordinates and maps finds back through the crop's origin.
@@ -497,10 +518,17 @@ object TemplateMatcher {
         val coarseScreen = downsample(screen, factor, 0, 0)
         val coarseBounds = PxRect(0, 0, coarseScreen.width, coarseScreen.height)
         val coarseIntegrals = Integrals(coarseScreen, coarseBounds)
-        val seeds = Candidates(limit = COARSE_CANDIDATES, separation = separation)
+        val coarseFloor = if (minimumScore.isFinite()) {
+            (minimumScore - 0.20f).coerceIn(0.25f, 0.85f)
+        } else {
+            0.50f
+        }
+        val seeds = Candidates(limit = 2, separation = separation, occurrenceThreshold = coarseFloor)
+        // At factor 1 downsampling is identity, so all four phase scans are duplicates.
+        val phases = if (factor <= 1) 0..0 else 0..1
 
-        for (phaseX in 0..1) {
-            for (phaseY in 0..1) {
+        for (phaseX in phases) {
+            for (phaseY in phases) {
                 val coarseTemplate = downsample(template, factor, phaseX, phaseY)
                 if (coarseTemplate.width > coarseScreen.width ||
                     coarseTemplate.height > coarseScreen.height
@@ -525,8 +553,9 @@ object TemplateMatcher {
                 // Separated in *coarse* pixels: these are coarse positions, and two of them
                 // a couple of coarse pixels apart are the same find.
                 val phaseSeeds = Candidates(
-                    limit = COARSE_CANDIDATES,
+                    limit = 2,
                     separation = max(2, separation / factor),
+                    occurrenceThreshold = coarseFloor,
                 )
                 scan(
                     coarseScreen, coarseTemplate, coarseBounds, coarseIntegrals, phaseSeeds,
@@ -534,7 +563,7 @@ object TemplateMatcher {
                     windowVarFloor = -1.0, // no floor at this scale (see above)
                     templateStats = stats(coarseTemplate),
                 )
-                for (seed in phaseSeeds.items) {
+                for (seed in phaseSeeds.matches + phaseSeeds.items) {
                     seeds.offer(
                         MatchResult(
                             seed.score,
@@ -547,7 +576,7 @@ object TemplateMatcher {
                 }
             }
         }
-        return seeds.items
+        return seeds.matches + seeds.items
     }
 
     /**
@@ -684,36 +713,106 @@ object TemplateMatcher {
      * Up to [limit] best-scoring windows, none of them within [separation] pixels of another
      * kept one. Two windows that close are the same find, so only the better one is kept.
      */
-    private class Candidates(private val limit: Int, private val separation: Int) {
+    private class Candidates(
+        private val limit: Int,
+        private val separation: Int,
+        private val occurrenceThreshold: Float,
+    ) {
         private val kept = ArrayList<MatchResult>(limit)
+        // Stable indexes let the spatial buckets update/merge a location without scanning or
+        // sorting every existing hit for every sliding window in the exhaustive path.
+        private val occurrences = ArrayList<MatchResult?>()
+        private val occurrenceBuckets = HashMap<Long, MutableList<Int>>()
 
+        /** Best bounded candidates used for diagnostics and coarse fallback. */
         val items: List<MatchResult> get() = kept
+
+        /** All separated threshold-qualified occurrences, sorted only once for the caller. */
+        val matches: List<MatchResult>
+            get() = occurrences.filterNotNull().sortedByDescending { it.score }
 
         val best: MatchResult? get() = kept.firstOrNull()
 
         val runnerUpScore: Float get() = kept.getOrNull(1)?.score ?: SearchOutcome.NO_RUNNER_UP
 
         fun offer(candidate: MatchResult) {
-            for (existing in kept) {
-                if (sameFind(existing, candidate)) {
-                    // Same spot, so the better score is the one worth keeping.
-                    if (candidate.score > existing.score) {
-                        kept[kept.indexOf(existing)] = candidate
-                        kept.sortByDescending { it.score }
-                    }
-                    return
+            offerLimited(candidate)
+            if (candidate.score >= occurrenceThreshold) offerOccurrence(candidate)
+        }
+
+        private fun offerLimited(candidate: MatchResult) {
+            val sameIndex = kept.indexOfFirst { sameFind(it, candidate) }
+            if (sameIndex >= 0) {
+                if (candidate.score > kept[sameIndex].score) {
+                    kept[sameIndex] = candidate
+                    kept.sortByDescending { it.score }
                 }
+                return
             }
             if (kept.size < limit) {
                 kept.add(candidate)
                 kept.sortByDescending { it.score }
+            } else if (candidate.score > kept.last().score) {
+                kept[kept.lastIndex] = candidate
+                kept.sortByDescending { it.score }
+            }
+        }
+
+        fun hasOccurrenceNear(candidate: MatchResult): Boolean {
+            val cellX = Math.floorDiv(candidate.left, separation)
+            val cellY = Math.floorDiv(candidate.top, separation)
+            for (dy in -1..1) for (dx in -1..1) {
+                occurrenceBuckets[bucketKey(cellX + dx, cellY + dy)]?.forEach { index ->
+                    val existing = occurrences[index] ?: return@forEach
+                    if (sameFind(existing, candidate)) return true
+                }
+            }
+            return false
+        }
+
+        private fun offerOccurrence(candidate: MatchResult) {
+            val cellX = Math.floorDiv(candidate.left, separation)
+            val cellY = Math.floorDiv(candidate.top, separation)
+            val neighbors = ArrayList<Int>()
+            for (dy in -1..1) for (dx in -1..1) {
+                occurrenceBuckets[bucketKey(cellX + dx, cellY + dy)]?.forEach { index ->
+                    val existing = occurrences[index] ?: return@forEach
+                    if (sameFind(existing, candidate)) neighbors += index
+                }
+            }
+            if (neighbors.isEmpty()) {
+                val index = occurrences.size
+                occurrences += candidate
+                occurrenceBuckets.getOrPut(bucketKey(cellX, cellY)) { ArrayList() }.add(index)
                 return
             }
-            val worst = kept.last()
-            if (candidate.score <= worst.score) return
-            kept[kept.size - 1] = candidate
-            kept.sortByDescending { it.score }
+
+            // A better offset/phase replaces the representative. If it bridges two nearby
+            // clusters, merge them here so the final list still describes distinct targets.
+            var keep = neighbors.first()
+            var winner = occurrences[keep]!!
+            for (index in neighbors.drop(1)) {
+                val existing = occurrences[index]!!
+                if (existing.score > winner.score) {
+                    keep = index
+                    winner = existing
+                }
+            }
+            if (candidate.score > winner.score) winner = candidate
+            for (index in neighbors) {
+                val old = occurrences[index]!!
+                occurrenceBuckets[bucketKey(Math.floorDiv(old.left, separation), Math.floorDiv(old.top, separation))]
+                    ?.remove(index)
+                if (index != keep) occurrences[index] = null
+            }
+            occurrences[keep] = winner
+            occurrenceBuckets.getOrPut(
+                bucketKey(Math.floorDiv(winner.left, separation), Math.floorDiv(winner.top, separation)),
+            ) { ArrayList() }.add(keep)
         }
+
+        private fun bucketKey(x: Int, y: Int): Long =
+            (x.toLong() shl 32) xor (y.toLong() and 0xFFFF_FFFFL)
 
         private fun sameFind(a: MatchResult, b: MatchResult): Boolean =
             abs(a.left - b.left) < separation && abs(a.top - b.top) < separation

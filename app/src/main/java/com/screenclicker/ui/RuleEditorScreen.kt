@@ -386,7 +386,7 @@ fun RuleEditorScreen(
                     FilterChip(
                         selected = editing.cadence == Cadence.ONCE_PER_APPEARANCE,
                         onClick = { update { it.copy(cadence = Cadence.ONCE_PER_APPEARANCE) } },
-                        label = { Text("Once per appearance") },
+                        label = { Text("Once per occurrence") },
                     )
                     FilterChip(
                         selected = editing.cadence == Cadence.REPEAT_WHILE_VISIBLE,
@@ -400,9 +400,9 @@ fun RuleEditorScreen(
                     }
                 }
                 Text(
-                    text = "Once per appearance clicks when the image appears, and waits " +
-                        "for it to disappear before clicking again. Repeat fires on an " +
-                        "interval for as long as the image is visible.",
+                    text = "Each matching occurrence clicks once when it appears, then waits " +
+                        "for that occurrence to disappear before clicking again. Other matches " +
+                        "can still click independently. Repeat fires each occurrence on its interval.",
                     style = MaterialTheme.typography.bodySmall,
                 )
                 NumberField("Priority (higher first)", editing.priority.toLong()) { v ->

@@ -44,7 +44,7 @@ jobs:
       # short sha, so the installed app can be matched to the build it came from
       # (Settings -> Apps -> Screen Clicker -> version).
       - name: Unit tests
-        run: gradle testDebugUnitTest -PversionCode=${{ github.run_number }} -PversionNameSuffix=-${{ env.SHORT_SHA }} --stacktrace
+        run: gradle jacocoDebugUnitTestCoverageVerification -PversionCode=${{ github.run_number }} -PversionNameSuffix=-${{ env.SHORT_SHA }} --stacktrace
 
       - name: Assemble debug APK
         run: gradle assembleDebug -PversionCode=${{ github.run_number }} -PversionNameSuffix=-${{ env.SHORT_SHA }} --stacktrace

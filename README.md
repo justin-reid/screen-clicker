@@ -53,10 +53,15 @@ GitHub to download artifacts.
 You'll need JDK 21 and the Android SDK (`compileSdk` 36):
 
 ```bash
-gradle assembleDebug
+gradle jacocoDebugUnitTestCoverageVerification assembleDebug
 ```
 
-Android Studio does both for you when it opens the project.
+The unit/integration-style JVM suite covers the matcher, scan/click runner, image/geometry
+models and serialization, with a 98% source-line coverage gate for those core packages.
+The Android framework boundary (accessibility/MediaProjection services, overlays and real
+gesture dispatch) still needs device/emulator testing; a green JVM build cannot simulate
+Android permission dialogs or OEM overlay/window behavior. Android Studio does both for you
+when it opens the project.
 
 ---
 

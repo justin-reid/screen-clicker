@@ -976,28 +976,27 @@ class ConfigOverlayService : Service() {
                                 scan,
                                 template,
                                 PxRect(0, 0, region.width, region.height),
+                                current.threshold,
                             )
                         }
                         val best = outcome.best
                         setStatus(
                             when {
-                                // Check exists to answer "would Run find this?". A bare score
-                                // cannot: a template with nothing in it, or two candidates that
-                                // score alike, would read as a find and then behave differently
-                                // in Run, which is the report this is here to stop.
+                                // This uses the same rule threshold and reports every qualifying
+                                // occurrence, just as Run does; the editor still never taps.
                                 outcome.confidence == Confidence.NO_CONTRAST ->
                                     "Template has almost no contrast — re-capture it while the " +
                                         "image is fully visible"
                                 best == null -> "Nothing found"
-                                outcome.confidence == Confidence.AMBIGUOUS ->
-                                    "Best ${percent(best.score)} at " +
-                                        "(${best.left + region.left},${best.top + region.top}) but a " +
-                                        "second candidate scores ${percent(outcome.runnerUp)} — " +
-                                        "not a reliable find"
+                                outcome.matches.isNotEmpty() ->
+                                    "${outcome.matches.size} match(es) at/above " +
+                                        "${(current.threshold * 100).toInt()}%; best " +
+                                        "${percent(best.score)} at " +
+                                        "(${best.left + region.left},${best.top + region.top})"
                                 else ->
-                                    "Best match ${percent(best.score)} at " +
+                                    "Best candidate ${percent(best.score)} at " +
                                         "(${best.left + region.left},${best.top + region.top})" +
-                                        " — threshold ${(current.threshold * 100).toInt()}%"
+                                        " — below threshold ${(current.threshold * 100).toInt()}%"
                             },
                         )
                     }

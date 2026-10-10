@@ -1,4 +1,5 @@
 plugins {
+    jacoco
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
@@ -86,4 +87,48 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.ui.tooling.preview)
     debugImplementation(libs.androidx.compose.ui.tooling)
+}
+
+// JVM logic coverage: Android framework/UI services need a device, so this report focuses
+// on the matcher, runner, and serializable model that are executable in local unit tests.
+tasks.register<org.gradle.testing.jacoco.tasks.JacocoReport>("jacocoDebugUnitTestReport") {
+    dependsOn("testDebugUnitTest")
+    executionData.setFrom(fileTree(layout.buildDirectory) {
+        include("jacoco/testDebugUnitTest.exec")
+        include("outputs/unit_test_code_coverage/debugUnitTest/testDebugUnitTest.exec")
+    })
+    classDirectories.setFrom(fileTree(layout.buildDirectory.dir("tmp/kotlin-classes/debug")) {
+        include("com/screenclicker/engine/**")
+        include("com/screenclicker/model/**")
+        include("com/screenclicker/vision/**")
+    })
+    sourceDirectories.setFrom(files("src/main/java"))
+    reports {
+        xml.required.set(true)
+        html.required.set(true)
+    }
+}
+
+// Fail CI if changes to the matcher/runner/models reduce tested source-line coverage.
+tasks.register<org.gradle.testing.jacoco.tasks.JacocoCoverageVerification>("jacocoDebugUnitTestCoverageVerification") {
+    dependsOn("jacocoDebugUnitTestReport")
+    executionData.setFrom(fileTree(layout.buildDirectory) {
+        include("jacoco/testDebugUnitTest.exec")
+        include("outputs/unit_test_code_coverage/debugUnitTest/testDebugUnitTest.exec")
+    })
+    classDirectories.setFrom(fileTree(layout.buildDirectory.dir("tmp/kotlin-classes/debug")) {
+        include("com/screenclicker/engine/**")
+        include("com/screenclicker/model/**")
+        include("com/screenclicker/vision/**")
+    })
+    sourceDirectories.setFrom(files("src/main/java"))
+    violationRules {
+        rule {
+            limit {
+                counter = "LINE"
+                value = "COVEREDRATIO"
+                minimum = "0.98".toBigDecimal()
+            }
+        }
+    }
 }

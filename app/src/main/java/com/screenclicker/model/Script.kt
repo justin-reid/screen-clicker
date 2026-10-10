@@ -16,10 +16,10 @@ enum class ClickMode {
 /**
  * When a matching rule may click again.
  *
- * ONCE_PER_APPEARANCE is the default: the rule fires when the image transitions from
- * absent to present, and stays quiet while it remains on screen — for one-shot dialogs
- * that must not be double-clicked. REPEAT_WHILE_VISIBLE fires on an interval for as
- * long as the image stays detected — classic auto-clicker spam.
+ * ONCE_PER_APPEARANCE is the default: each distinct matched location fires once when it
+ * appears, then stays quiet while that same occurrence remains visible. Other matches of
+ * the same template are independent occurrences. REPEAT_WHILE_VISIBLE fires each visible
+ * occurrence again after its interval.
  */
 @Serializable
 enum class Cadence {
@@ -93,9 +93,9 @@ data class Rule(
     /** Random fuzz applied to [delayMs]: effective delay = delay ± random(jitter). */
     val jitterMs: Long = 0,
     val cadence: Cadence = Cadence.ONCE_PER_APPEARANCE,
-    /** For REPEAT_WHILE_VISIBLE: minimum time between clicks on this rule. */
+    /** For REPEAT_WHILE_VISIBLE: minimum time between clicks at each matched occurrence. */
     val intervalMs: Long = 1_000,
-    /** Higher priority rules are evaluated first; first match wins the frame. */
+    /** Higher priority rules are evaluated first; each rule may yield multiple occurrences. */
     val priority: Int = 0,
 ) {
     val hasTemplate: Boolean get() = templateFile != null
