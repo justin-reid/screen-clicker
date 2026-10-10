@@ -43,9 +43,11 @@ class TemplateMatcherBenchmarkTest {
         for (templateSize in intArrayOf(120, 200, 400)) {
             val template = patch(screen, 300, 1200, templateSize, templateSize)
             // Warm once so JIT has seen the loops before the measured run.
-            TemplateMatcher.findBest(screen, template, region, 0f)
+            TemplateMatcher.search(screen, template, region)
             val start = System.nanoTime()
-            val result = TemplateMatcher.findBest(screen, template, region, 0f)
+            // search() exposes the best-effort candidate even when this synthetic UI has
+            // repeated equal-looking blocks and therefore is not safe to click.
+            val result = TemplateMatcher.search(screen, template, region).best
             val ms = (System.nanoTime() - start) / 1_000_000
             println("template=${templateSize}x$templateSize match=${ms}ms score=${result?.score}")
             assertNotNull(result)
@@ -81,9 +83,10 @@ class TemplateMatcherBenchmarkTest {
         }
         val faded = GrayImage(width, height, fadedPx)
 
-        TemplateMatcher.findBest(faded, template, region, 0f) // JIT warm-up
+        TemplateMatcher.search(faded, template, region) // JIT warm-up
         val start = System.nanoTime()
-        val result = TemplateMatcher.findBest(faded, template, region, 0.9f)
+        val outcome = TemplateMatcher.search(faded, template, region)
+        val result = outcome.best
         val ms = (System.nanoTime() - start) / 1_000_000
         println("faded template=120x120 match=${ms}ms score=${result?.score} edge=${result?.viaHighPass}")
         assertNotNull(result)

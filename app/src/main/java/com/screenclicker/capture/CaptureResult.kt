@@ -9,6 +9,7 @@ package com.screenclicker.capture
 sealed class CaptureResult {
 
     data class Success(
+        /** Row-major pixels; callers must treat the array as immutable. */
         val argb: IntArray,
         val width: Int,
         val height: Int,

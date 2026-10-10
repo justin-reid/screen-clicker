@@ -21,6 +21,18 @@ import kotlinx.coroutines.isActive
 import kotlin.math.max
 import kotlin.random.Random
 
+/** Whether a search result is safe and sufficiently strong for this rule's click destination. */
+internal fun SearchOutcome.isActionableFor(rule: Rule): Boolean {
+    val match = best ?: return false
+    if (match.score < rule.threshold) return false
+    if (confidence == Confidence.SHARP) return true
+    return confidence == Confidence.AMBIGUOUS && rule.hasDefinedClickArea()
+}
+
+internal fun Rule.hasDefinedClickArea(): Boolean =
+    clickMode == ClickMode.ON_REGION &&
+        clickRegion?.let { it.width > 0 && it.height > 0 } == true
+
 /**
  * The scan-and-click loop.
  *
@@ -78,6 +90,9 @@ class ScriptRunner(
         var reportedFrame = false
         var reportedSpaceMismatch = false
         var reportedSkips = false
+        // Keep the last gesture result in the periodic panel status. A one-shot tap event
+        // was overwritten by the next scan line before users could read whether a tap ran.
+        var lastTapOutcome: String? = null
         while (currentCoroutineContext().isActive) {
             val frameStarted = SystemClock.elapsedRealtime()
             val settings = settingsRepo.load()
@@ -205,9 +220,9 @@ class ScriptRunner(
                     matchMs += System.currentTimeMillis() - matchStarted
                     outcomes[rule.id] = outcome
                     val best = outcome.best
-                    if (best != null && outcome.confidence == Confidence.SHARP &&
-                        best.score >= rule.threshold
-                    ) {
+                    // A tie makes image-click location ambiguous, but a fixed click area only
+                    // needs evidence that the target is present somewhere in the search region.
+                    if (outcome.isActionableFor(rule) && best != null) {
                         matches[rule.id] = best.copy(
                             left = best.left + union.left,
                             top = best.top + union.top,
@@ -220,13 +235,19 @@ class ScriptRunner(
             if (SystemClock.elapsedRealtime() - lastStatsAt >= STATS_INTERVAL_MS) {
                 lastStatsAt = SystemClock.elapsedRealtime()
                 val scanMs = captureMs + grayMs + matchMs
+                val highlightOffsets = enabledRules.joinToString { rule ->
+                    "${rule.name}(${rule.tapAlignX - rule.alignX}," +
+                        "${rule.tapAlignY - rule.alignY})"
+                }
                 onEvent(
                     "scan ${scanMs}ms — capture $captureMs, gray $grayMs, match $matchMs, " +
                         "cadence ${settings.scanIntervalMs}ms " +
                         "(frame ${frame.width}x${frame.height}, " +
                         (union?.let { "region ${it.width}x${it.height}" } ?: "no search region") +
                         ")" +
-                        logOutcomes(outcomes, rulesById),
+                        (lastTapOutcome?.let { "\nLast tap: $it" } ?: "") +
+                        "\nHighlight Δ: $highlightOffsets" +
+                        "\n" + logOutcomes(outcomes, rulesById),
                 )
             }
 
@@ -251,7 +272,11 @@ class ScriptRunner(
             // space (see clickBounds); the two are the same on most devices, and this shows
             // a shifted box when they are not — rather than a box that silently lies.
             onDetections(
-                matches.map { (ruleId, match) ->
+                matches.mapNotNull { (ruleId, match) ->
+                    // An ambiguous location may still establish presence for a fixed click
+                    // area, but drawing its arbitrary top candidate as the detected image
+                    // would make the highlight falsely precise.
+                    if (outcomes[ruleId]?.confidence != Confidence.SHARP) return@mapNotNull null
                     val rule = rulesById.getValue(ruleId)
                     match.translated(rule.tapAlignX - rule.alignX, rule.tapAlignY - rule.alignY)
                 },
@@ -269,16 +294,23 @@ class ScriptRunner(
                 delay(wait)
                 val (x, y) = bounds.randomPoint(rng)
                 val landed = onTap(x, y)
-                if (landed) states[hit.rule.id]?.lastClickAt = SystemClock.elapsedRealtime()
+                if (landed) {
+                    states[hit.rule.id]?.lastClickAt = SystemClock.elapsedRealtime()
+                } else if (hit.rule.cadence == Cadence.ONCE_PER_APPEARANCE) {
+                    // A refused/cancelled gesture did not act on this appearance; leave the
+                    // edge unconsumed so the runner can retry instead of silently giving up.
+                    states[hit.rule.id]?.wasPresent = false
+                }
+                val destination = if (hit.rule.hasDefinedClickArea()) "area" else "match"
+                val tapOutcome = "${hit.rule.name}: $destination bounds=$bounds tap=($x,$y), " +
+                    if (landed) "gesture completed" else "gesture cancelled"
+                lastTapOutcome = tapOutcome
                 Log.i(
                     TAG,
                     "rule='${hit.rule.name}' score=${"%.2f".format(hit.match.score)} " +
-                        "tap=($x,$y) landed=$landed",
+                        "destination=$destination bounds=$bounds tap=($x,$y) completed=$landed",
                 )
-                onEvent(
-                    "${hit.rule.name}: ${"%.0f".format(hit.match.score * 100)}% → tap " +
-                        "($x,$y)${if (landed) "" else " FAILED"}",
-                )
+                onEvent(tapOutcome)
             }
 
             // Hold the scan cadence.
@@ -298,6 +330,7 @@ class ScriptRunner(
      * screenshot smaller than the display), using one for both would put every tap out by
      * the difference.
      */
+
     private fun clickBounds(rule: Rule, match: MatchResult): PxRect {
         val matchBounds = PxRect(
             match.left,
@@ -308,14 +341,13 @@ class ScriptRunner(
         val configured = rule.clickRegion
         return when {
             // A match is in screenshot space: bring it into display space for the gesture.
-            rule.clickMode != ClickMode.ON_REGION || configured == null ||
-                configured.width <= 0 || configured.height <= 0 -> matchBounds.translated(
+            !rule.hasDefinedClickArea() -> matchBounds.translated(
                 rule.tapAlignX - rule.alignX,
                 rule.tapAlignY - rule.alignY,
             )
 
             // A configured region is in the editor's model space, like the search region.
-            else -> configured.translated(rule.tapAlignX, rule.tapAlignY)
+            else -> checkNotNull(configured).translated(rule.tapAlignX, rule.tapAlignY)
         }
     }
 

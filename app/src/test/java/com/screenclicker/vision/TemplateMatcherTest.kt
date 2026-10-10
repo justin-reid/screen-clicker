@@ -241,6 +241,22 @@ class TemplateMatcherTest {
     }
 
     @Test
+    fun `a tie between exact high-scoring copies is ambiguous`() {
+        val screen = noiseImage(240, 180, seed = 19)
+        val template = patch(screen, 24, 28, 32, 24)
+        // Both locations are exact copies. A 99%-plus score cannot tell which one the user
+        // meant, so the runner must not choose one just because the score is high.
+        val duplicated = paste(screen, template, 164, 128)
+        val outcome = TemplateMatcher.search(duplicated, template, null)
+
+        assertNotNull(outcome.best)
+        assertTrue("winner ${outcome.best!!.score}", outcome.best!!.score >= 0.99f)
+        assertTrue("runner-up ${outcome.runnerUp}", outcome.runnerUp >= 0.99f)
+        assertEquals(Confidence.AMBIGUOUS, outcome.confidence)
+        assertNull(TemplateMatcher.findBest(duplicated, template, null, 0f))
+    }
+
+    @Test
     fun `tiny template is found through the small-template path`() {
         val screen = noiseImage(120, 90, seed = 7)
         val template = patch(screen, 61, 41, 5, 5)

@@ -17,6 +17,7 @@ import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
@@ -46,9 +47,10 @@ import java.util.concurrent.atomic.AtomicReference
  * capture session; the projection ends when the system revokes it or the service is
  * stopped (notification Stop action, or Settings -> Stop capture).
  *
- * Frame handling: the ImageReader listener converts the newest frame into an ARGB
- * IntArray under a lock and closes the Image immediately (the reader's buffer pool is
- * tiny and stalls if images are held). capture() returns the newest converted frame —
+ * Frame handling: a dedicated image thread converts the newest frame into an ARGB
+ * IntArray and closes the Image immediately (the reader's buffer pool is tiny and stalls
+ * if images are held). Conversion is deliberately off the main thread: one 1080p frame
+ * requires millions of pixel reads. capture() returns the newest converted frame —
  * importantly, a STATIC screen produces no frame callbacks at all, in which case the
  * cached frame is exactly the right answer and is returned without waiting.
  */
@@ -63,8 +65,18 @@ class CaptureProjectionService : Service() {
 
     private var projection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
+    @Volatile
     private var imageReader: ImageReader? = null
+    private var conversionThread: HandlerThread? = null
+    private var conversionHandler: Handler? = null
     private var displayListener: DisplayManager.DisplayListener? = null
+
+    @Volatile
+    private var mirrorGeneration = 0
+
+    /** Last frame converted on the dedicated image thread; bounds needless vsync work. */
+    @Volatile
+    private var lastFrameConversionAt = 0L
 
     /** Size the mirror is currently running at, in pixels. */
     @Volatile
@@ -78,6 +90,8 @@ class CaptureProjectionService : Service() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        conversionThread = HandlerThread("screen-clicker-image-convert").apply { start() }
+        conversionHandler = Handler(checkNotNull(conversionThread).looper)
         startInForeground()
     }
 
@@ -155,16 +169,19 @@ class CaptureProjectionService : Service() {
      */
     private fun replaceMirror(width: Int, height: Int) {
         val mediaProjection = projection ?: return
+        val generation = ++mirrorGeneration
+        val oldReader = imageReader
+        imageReader = null
         virtualDisplay?.release()
         virtualDisplay = null
-        imageReader?.close()
-        imageReader = null
+        closeReaderAfterQueuedConversions(oldReader)
         mirrorWidth = width
         mirrorHeight = height
         // The cached frame and any pending wake-up belong to the previous size: without
         // draining the signal, a capture that starts right after a swap would wake on the
         // stale one and report "no frames" for a cycle.
-        latestFrame.set(null)
+        synchronized(frameLock) { latestFrame.set(null) }
+        lastFrameConversionAt = 0L
         while (frameSignal.tryReceive().isSuccess) {
             // discard
         }
@@ -172,14 +189,37 @@ class CaptureProjectionService : Service() {
         val dpi = resources.displayMetrics.densityDpi
         val reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 4)
         reader.setOnImageAvailableListener({ activeReader ->
-            val image: Image = activeReader.acquireLatestImage() ?: return@setOnImageAvailableListener
-            try {
+            // A resize can close a reader while its callback is queued. Ignore stale readers,
+            // and tolerate acquireLatestImage racing with close.
+            if (generation != mirrorGeneration || activeReader !== imageReader) {
+                return@setOnImageAvailableListener
+            }
+            val image: Image = try {
+                activeReader.acquireLatestImage()
+            } catch (_: IllegalStateException) {
+                null
+            } ?: return@setOnImageAvailableListener
+            val now = SystemClock.uptimeMillis()
+            if (now - lastFrameConversionAt < MIN_FRAME_CONVERSION_INTERVAL_MS) {
+                image.close()
+                return@setOnImageAvailableListener
+            }
+            lastFrameConversionAt = now
+            val converted = try {
                 convert(image)
+            } catch (e: RuntimeException) {
+                Log.w(TAG, "could not convert a projection frame", e)
+                return@setOnImageAvailableListener
             } finally {
                 image.close()
             }
-            frameSignal.trySend(Unit)
-        }, Handler(Looper.getMainLooper()))
+            synchronized(frameLock) {
+                if (generation == mirrorGeneration && activeReader === imageReader) {
+                    latestFrame.set(converted)
+                    frameSignal.trySend(Unit)
+                }
+            }
+        }, checkNotNull(conversionHandler))
 
         imageReader = reader
         virtualDisplay = runCatching {
@@ -200,14 +240,25 @@ class CaptureProjectionService : Service() {
             Log.w(TAG, "could not create the mirror at ${width}x$height")
             reader.close()
             imageReader = null
-            latestFrame.set(null)
+            synchronized(frameLock) { latestFrame.set(null) }
         } else {
             Log.i(TAG, "projection running at ${width}x$height")
         }
     }
 
+    /** Closes a reader on the same serial thread that may still be consuming one of its Images. */
+    private fun closeReaderAfterQueuedConversions(reader: ImageReader?) {
+        reader ?: return
+        reader.setOnImageAvailableListener(null, null)
+        val posted = conversionHandler?.post {
+            runCatching { reader.close() }
+                .onFailure { Log.w(TAG, "could not close an old projection reader", it) }
+        } ?: false
+        if (!posted) runCatching { reader.close() }
+    }
+
     /** Decomposes the RGBA image into ARGB ints, honoring row stride padding. */
-    private fun convert(image: Image) {
+    private fun convert(image: Image): Frame {
         val width = image.width
         val height = image.height
         val argb = IntArray(width * height)
@@ -215,20 +266,18 @@ class CaptureProjectionService : Service() {
         val buffer = plane.buffer
         val pixelStride = plane.pixelStride
         val rowStride = plane.rowStride
-        synchronized(frameLock) {
-            for (y in 0 until height) {
-                val rowBase = y * rowStride
-                val outBase = y * width
-                for (x in 0 until width) {
-                    val i = rowBase + x * pixelStride
-                    val r = buffer.get(i).toInt() and 0xFF
-                    val g = buffer.get(i + 1).toInt() and 0xFF
-                    val b = buffer.get(i + 2).toInt() and 0xFF
-                    argb[outBase + x] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
-                }
+        for (y in 0 until height) {
+            val rowBase = y * rowStride
+            val outBase = y * width
+            for (x in 0 until width) {
+                val i = rowBase + x * pixelStride
+                val r = buffer.get(i).toInt() and 0xFF
+                val g = buffer.get(i + 1).toInt() and 0xFF
+                val b = buffer.get(i + 2).toInt() and 0xFF
+                argb[outBase + x] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
             }
-            latestFrame.set(Frame(argb, width, height, SystemClock.uptimeMillis()))
         }
+        return Frame(argb, width, height, SystemClock.uptimeMillis())
     }
 
     suspend fun capture(): CaptureResult {
@@ -254,7 +303,9 @@ class CaptureProjectionService : Service() {
             ) {
                 return CaptureResult.Failure("Frame is from a previous display size")
             }
-            return CaptureResult.Success(current.argb.copyOf(), current.width, current.height)
+            // The cached pixel array is immutable after publication; sharing it avoids an
+            // extra full-screen allocation and copy on every scan.
+            return CaptureResult.Success(current.argb, current.width, current.height)
         }
     }
 
@@ -295,17 +346,24 @@ class CaptureProjectionService : Service() {
     }
 
     override fun onDestroy() {
+        // Invalidate and detach callbacks before closing the reader so queued work cannot
+        // publish a frame from a service/display that has already gone away.
+        mirrorGeneration++
+        val oldReader = imageReader
+        imageReader = null
         displayListener?.let {
             runCatching { getSystemService(DisplayManager::class.java).unregisterDisplayListener(it) }
         }
         displayListener = null
         virtualDisplay?.release()
         virtualDisplay = null
-        imageReader?.close()
-        imageReader = null
+        closeReaderAfterQueuedConversions(oldReader)
+        conversionThread?.quitSafely()
+        conversionThread = null
+        conversionHandler = null
         projection?.stop()
         projection = null
-        latestFrame.set(null)
+        synchronized(frameLock) { latestFrame.set(null) }
         scope.cancel()
         instance = null
         super.onDestroy()
@@ -315,6 +373,7 @@ class CaptureProjectionService : Service() {
         private const val TAG = "CaptureProjection"
         private const val CHANNEL_ID = "capture"
         private const val NOTIFICATION_ID = 43
+        private const val MIN_FRAME_CONVERSION_INTERVAL_MS = 100L
         private const val EXTRA_RESULT_CODE = "resultCode"
         private const val EXTRA_DATA = "data"
         const val ACTION_STOP = "com.screenclicker.action.STOP_CAPTURE"

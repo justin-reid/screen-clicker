@@ -94,9 +94,9 @@ data class SearchOutcome(
  *  - a window must carry its own contrast, relative to the template's (see
  *    [CONTRAST_FRACTION]) — a flat window has no structure, so any correlation it shows is
  *    curve-fitting noise;
- *  - a result below [CONFIDENT_SCORE] with a runner-up within [AMBIGUITY_MARGIN] is reported
- *    as ambiguous instead of as a find, because "which of these two spots" is not a question
- *    the caller can answer.
+ *  - a runner-up within [AMBIGUITY_MARGIN] of the winner is reported as ambiguous regardless
+ *    of the absolute score: two exact copies are still two possible locations, and "which of
+ *    these two spots" is not a question the caller can answer.
  *
  * Fades need a second body of evidence. Alpha-blending the image with a *flat* background
  * is an affine change of the template and plain ZNCC is invariant to it; alpha-blending with
@@ -190,10 +190,10 @@ object TemplateMatcher {
      */
     private const val MIN_WINDOW_VAR = 1.0
 
-    /** At or above this score the winner is sharp enough that a rival does not matter. */
+    /** At or above this score, no high-pass re-score is needed. */
     private const val CONFIDENT_SCORE = 0.95f
 
-    /** Below [CONFIDENT_SCORE], a runner-up this close means "cannot tell which one". */
+    /** A separated runner-up this close means "cannot tell which one", even at 99%+. */
     private const val AMBIGUITY_MARGIN = 0.05f
 
     /**
@@ -299,8 +299,8 @@ object TemplateMatcher {
         }
 
         // Plain ZNCC is confident about an unfaded target, so the second pass only re-scores
-        // the same windows when the first left doubt: a faint find, an ambiguous one, or
-        // nothing at all.
+        // when the best raw score is low or absent. A close runner-up is handled as ambiguity
+        // after scoring; high-pass evidence cannot make two exact copies one location.
         val rawBest = refined.best
         if (rawBest == null || rawBest.score < CONFIDENT_SCORE) {
             edge?.let {
@@ -325,7 +325,7 @@ object TemplateMatcher {
 
         val best = refined.best ?: return notFound()
         val runnerUp = refined.runnerUpScore
-        val ambiguous = best.score < CONFIDENT_SCORE &&
+        val ambiguous = runnerUp != SearchOutcome.NO_RUNNER_UP &&
             runnerUp >= best.score - AMBIGUITY_MARGIN
         return SearchOutcome(
             best = best,
