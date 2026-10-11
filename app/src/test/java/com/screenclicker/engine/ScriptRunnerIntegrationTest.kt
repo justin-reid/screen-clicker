@@ -89,7 +89,7 @@ class ScriptRunnerIntegrationTest {
         settings: GlobalSettings = GlobalSettings(scanIntervalMs = 0),
         clock: () -> Long = { 10_000L },
         onCapture: () -> Unit = {},
-        tapResult: (Point) -> Boolean = { true },
+        tapResult: (Point) -> TapOutcome = { TapOutcome.DELIVERED },
         foregroundPackage: () -> String? = { null },
         targetPackage: String? = null,
     ): RunResult {
@@ -260,7 +260,7 @@ class ScriptRunnerIntegrationTest {
             ),
             f.template,
             listOf(both, both, both),
-            tapResult = { calls++; calls != 1 },
+            tapResult = { calls++; if (calls == 1) TapOutcome.CANCELLED else TapOutcome.DELIVERED },
         )
 
         // The first press is refused, so it is retried next frame; the two occurrences share
@@ -334,15 +334,18 @@ class ScriptRunnerIntegrationTest {
     }
 
     @Test
-    fun `a refused gesture is reported as failed, not as completed`() {
+    fun `a declined gesture is reported with its own reason, not as cancelled`() {
         val f = fixture()
         val result = execute(
             rule(f), f.template,
             listOf(f.capture(f.frame(Point(50, 50)))),
-            tapResult = { false },
+            tapResult = { TapOutcome.DECLINED },
         )
 
-        assertTrue(result.events.any { it.contains("gesture failed (refused or no reply)") })
+        // A service that may not inject gestures at all is not the same fault as one that
+        // was interrupted: the panel has to say which, or the diagnosis is a guess.
+        assertTrue(result.events.any { it.contains("gesture declined — the system would not take it") })
+        assertTrue(result.events.any { it.contains("taps this run 1") })
     }
 
     @Test
@@ -353,7 +356,7 @@ class ScriptRunnerIntegrationTest {
         val result = execute(
             rule(f), f.template,
             listOf(f.capture(f.frame(target)), f.capture(f.frame(target))),
-            tapResult = { count++; count > 1 },
+            tapResult = { count++; if (count == 1) TapOutcome.CANCELLED else TapOutcome.DELIVERED },
         )
 
         assertEquals(2, result.taps.size)
@@ -385,7 +388,7 @@ class ScriptRunnerIntegrationTest {
         val both = f.capture(f.frame(a, b))
         val result = execute(
             rule(f), f.template, listOf(both, both),
-            tapResult = { calls++; calls != 1 },
+            tapResult = { calls++; if (calls == 1) TapOutcome.CANCELLED else TapOutcome.DELIVERED },
         )
 
         // The first (A) tap is refused, B still clicks in that frame, then only A retries.
@@ -444,7 +447,7 @@ class ScriptRunnerIntegrationTest {
         val runner = ScriptRunner({ GlobalSettings(scanIntervalMs = 0) }, SequenceCapturer(listOf(f.capture(f.frame()))), { 10_000L }, {}, {})
         try {
             runBlocking {
-                runner.run(Script(rules = listOf(rule(f))), emptyMap(), { null }, { _, _ -> false }, onEvent = events::add)
+                runner.run(Script(rules = listOf(rule(f))), emptyMap(), { null }, { _, _ -> TapOutcome.DECLINED }, onEvent = events::add)
             }
         } catch (_: CancellationException) {}
         assertTrue(events.any { it.contains("template could not be read") })
@@ -511,7 +514,7 @@ class ScriptRunnerIntegrationTest {
         val runner = ScriptRunner({ GlobalSettings() }, SequenceCapturer(emptyList()), { 10_000L }, {}, {})
         val events = mutableListOf<String>()
         runBlocking {
-            runner.run(Script(rules = listOf(noTemplate, disabled)), emptyMap(), { null }, { _, _ -> false }, onEvent = events::add)
+            runner.run(Script(rules = listOf(noTemplate, disabled)), emptyMap(), { null }, { _, _ -> TapOutcome.DECLINED }, onEvent = events::add)
         }
         assertTrue(events.single().contains("No enabled rules"))
     }

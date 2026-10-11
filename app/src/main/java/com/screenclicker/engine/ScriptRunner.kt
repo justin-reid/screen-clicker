@@ -76,7 +76,7 @@ class ScriptRunner(
         script: Script,
         templates: Map<String, GrayImage>,
         foregroundPackage: () -> String?,
-        onTap: suspend (x: Int, y: Int) -> Boolean,
+        onTap: suspend (x: Int, y: Int) -> TapOutcome,
         onDetections: (List<MatchResult>) -> Unit = {},
         onEvent: (String) -> Unit = {},
     ) {
@@ -317,7 +317,8 @@ class ScriptRunner(
                 // gesture back, this line is the evidence of where the run stopped.
                 tapAttempts++
                 onEvent("${hit.rule.name}: injecting tap at ($x,$y) — attempt $tapAttempts")
-                val landed = onTap(x, y)
+                val reply = onTap(x, y)
+                val landed = reply.acted
                 val state = states[hit.rule.id]
                 if (landed && hit.rule.cadence == Cadence.REPEAT_WHILE_VISIBLE) {
                     state?.lastClickAtByLocation?.set(hit.match.left to hit.match.top, elapsedRealtime())
@@ -327,12 +328,13 @@ class ScriptRunner(
                     state?.previousMatches = state.previousMatches.filterNot { sameOccurrence(it, hit.match) }
                 }
                 val destination = if (hit.rule.hasDefinedClickArea()) "area" else "match"
-                val tapOutcome = "${hit.rule.name}: $destination bounds=$bounds tap=($x,$y), " +
-                    if (landed) "gesture accepted" else "gesture failed (refused or no reply)"
+                val tapOutcome = "${hit.rule.name}: $destination bounds=$bounds " +
+                    "tap=($x,$y), ${reply.report}"
                 lastTapOutcome = tapOutcome
                 writeLog(
                     "rule='${hit.rule.name}' score=${"%.2f".format(hit.match.score)} " +
-                        "destination=$destination bounds=$bounds tap=($x,$y) completed=$landed",
+                        "destination=$destination bounds=$bounds tap=($x,$y) " +
+                        "reply=${reply.name} completed=$landed",
                 )
                 onEvent(tapOutcome)
             }

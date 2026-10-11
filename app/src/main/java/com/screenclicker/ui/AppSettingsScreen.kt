@@ -273,14 +273,17 @@ private fun DiagnosticsCard() {
                             delay(1_000)
                         }
                         countdown = null
-                        val ok = ClickerAccessibilityService.tap(
+                        val outcome = ClickerAccessibilityService.tap(
                             context.resources.displayMetrics.widthPixels / 2f,
                             context.resources.displayMetrics.heightPixels / 2f,
                         )
+                        // The reason matters more than the verdict: "the system would not
+                        // take the gesture" is a configuration fault, not a timing one.
                         Toast.makeText(
                             context,
-                            if (ok) "Tap dispatched" else "Tap failed",
-                            Toast.LENGTH_SHORT,
+                            if (outcome.acted) "Tap dispatched"
+                            else "Tap not sent: ${outcome.report}",
+                            Toast.LENGTH_LONG,
                         ).show()
                     }
                 }) {

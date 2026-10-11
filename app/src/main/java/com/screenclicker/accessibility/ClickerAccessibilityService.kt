@@ -28,6 +28,7 @@ import com.screenclicker.capture.CaptureConsentActivity
 import com.screenclicker.capture.CaptureProjectionService
 import com.screenclicker.capture.CaptureResult
 import com.screenclicker.engine.ScriptRunner
+import com.screenclicker.engine.TapOutcome
 import com.screenclicker.model.GlobalSettings
 import com.screenclicker.model.Script
 import com.screenclicker.overlay.ConfigOverlayService
@@ -141,9 +142,9 @@ class ClickerAccessibilityService : AccessibilityService() {
             instance?.capture()
                 ?: CaptureResult.Failure("Accessibility service is not enabled")
 
-        /** Taps the screen at the given coordinates; returns false when it did not land. */
-        suspend fun tap(x: Float, y: Float): Boolean =
-            instance?.tap(x, y) ?: false
+        /** Taps the screen at the given coordinates; see [TapOutcome] for what came back. */
+        suspend fun tap(x: Float, y: Float): TapOutcome =
+            instance?.tap(x, y) ?: TapOutcome.DECLINED
 
         /**
          * Temporarily hides the detection highlight layer so it cannot appear inside a
@@ -597,16 +598,19 @@ class ClickerAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Injects a tap at (x, y) in screen pixels. Returns false if the system refused or
-     * cancelled the gesture, or accepted it and never reported back (see
-     * [TAP_REPLY_TIMEOUT_MS] — the caller must not be left waiting forever).
+     * Injects a tap at (x, y) in screen pixels.
+     *
+     * Reporting *which* way it failed matters: a gesture the system will not take at all
+     * (no gesture capability, or a service that lost its connection) is a completely
+     * different problem from one that was interrupted or never answered, and they used to
+     * share one word.
      */
-    suspend fun tap(x: Float, y: Float): Boolean = withContext(Dispatchers.Main) {
+    suspend fun tap(x: Float, y: Float): TapOutcome = withContext(Dispatchers.Main) {
         // Never tap while the installer is on screen: the script's taps would land on the
         // install dialog, and a stray tap there can cancel the install. The runner treats a
         // refused gesture as "not now" (it does not burn the rule's interval), so the script
         // simply resumes when the installer goes away.
-        if (installerUp) return@withContext false
+        if (installerUp) return@withContext TapOutcome.GUARDED
         val path = Path().apply { moveTo(x, y) }
         val stroke = GestureDescription.StrokeDescription(path, 0, TAP_DURATION_MS)
         val gesture = GestureDescription.Builder().addStroke(stroke).build()
@@ -616,21 +620,26 @@ class ClickerAccessibilityService : AccessibilityService() {
                     gesture,
                     object : GestureResultCallback() {
                         override fun onCompleted(gestureDescription: GestureDescription?) {
-                            if (cont.isActive) cont.resume(true)
+                            if (cont.isActive) cont.resume(TapOutcome.DELIVERED)
                         }
 
                         override fun onCancelled(gestureDescription: GestureDescription?) {
-                            if (cont.isActive) cont.resume(false)
+                            if (cont.isActive) cont.resume(TapOutcome.CANCELLED)
                         }
                     },
                     null,
                 )
-                if (!dispatched && cont.isActive) cont.resume(false)
+                if (!dispatched) {
+                    // Nothing is ever injected without CAPABILITY_CAN_PERFORM_GESTURES,
+                    // which only android:canPerformGestures declares.
+                    Log.w(TAG, "dispatchGesture declined a tap at ($x, $y)")
+                    if (cont.isActive) cont.resume(TapOutcome.DECLINED)
+                }
             }
         }
         if (replied == null) {
             Log.w(TAG, "no gesture reply within ${TAP_REPLY_TIMEOUT_MS}ms for tap at ($x, $y)")
-            return@withContext false
+            return@withContext TapOutcome.UNANSWERED
         }
         replied
     }
