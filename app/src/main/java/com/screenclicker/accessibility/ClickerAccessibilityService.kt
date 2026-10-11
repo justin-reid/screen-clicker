@@ -50,6 +50,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 
 /**
@@ -78,6 +79,18 @@ class ClickerAccessibilityService : AccessibilityService() {
 
         /** How long the synthetic finger stays down. Short enough to feel instant. */
         private const val TAP_DURATION_MS = 60L
+
+        /**
+         * How long to wait for the system to report a dispatched gesture back before
+         * giving up on it.
+         *
+         * The report normally arrives within a frame or two of the 60ms stroke ending.
+         * It is not guaranteed to arrive at all, and the runner awaits this call inside its
+         * scan loop: one dropped callback used to freeze the whole run with no event, no
+         * error and no tap — indistinguishable from "found nothing". Timing out turns that
+         * into an ordinary failed tap that the next scan retries.
+         */
+        private const val TAP_REPLY_TIMEOUT_MS = 1_500L
 
         private const val ENGINE_CHANNEL_ID = "engine"
         private const val ENGINE_NOTIFICATION_ID = 42
@@ -585,7 +598,8 @@ class ClickerAccessibilityService : AccessibilityService() {
 
     /**
      * Injects a tap at (x, y) in screen pixels. Returns false if the system refused or
-     * cancelled the gesture.
+     * cancelled the gesture, or accepted it and never reported back (see
+     * [TAP_REPLY_TIMEOUT_MS] — the caller must not be left waiting forever).
      */
     suspend fun tap(x: Float, y: Float): Boolean = withContext(Dispatchers.Main) {
         // Never tap while the installer is on screen: the script's taps would land on the
@@ -596,21 +610,28 @@ class ClickerAccessibilityService : AccessibilityService() {
         val path = Path().apply { moveTo(x, y) }
         val stroke = GestureDescription.StrokeDescription(path, 0, TAP_DURATION_MS)
         val gesture = GestureDescription.Builder().addStroke(stroke).build()
-        suspendCancellableCoroutine { cont ->
-            val dispatched = dispatchGesture(
-                gesture,
-                object : GestureResultCallback() {
-                    override fun onCompleted(gestureDescription: GestureDescription?) {
-                        if (cont.isActive) cont.resume(true)
-                    }
+        val replied = withTimeoutOrNull(TAP_REPLY_TIMEOUT_MS) {
+            suspendCancellableCoroutine { cont ->
+                val dispatched = dispatchGesture(
+                    gesture,
+                    object : GestureResultCallback() {
+                        override fun onCompleted(gestureDescription: GestureDescription?) {
+                            if (cont.isActive) cont.resume(true)
+                        }
 
-                    override fun onCancelled(gestureDescription: GestureDescription?) {
-                        if (cont.isActive) cont.resume(false)
-                    }
-                },
-                null,
-            )
-            if (!dispatched && cont.isActive) cont.resume(false)
+                        override fun onCancelled(gestureDescription: GestureDescription?) {
+                            if (cont.isActive) cont.resume(false)
+                        }
+                    },
+                    null,
+                )
+                if (!dispatched && cont.isActive) cont.resume(false)
+            }
         }
+        if (replied == null) {
+            Log.w(TAG, "no gesture reply within ${TAP_REPLY_TIMEOUT_MS}ms for tap at ($x, $y)")
+            return@withContext false
+        }
+        replied
     }
 }

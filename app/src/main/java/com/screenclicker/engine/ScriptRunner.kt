@@ -99,6 +99,10 @@ class ScriptRunner(
         // Keep the last gesture result in the periodic panel status. A one-shot tap event
         // was overwritten by the next scan line before users could read whether a tap ran.
         var lastTapOutcome: String? = null
+        // How many gestures this run has tried to inject. A tally that stays at zero while
+        // the status line reports hits is the difference between a cadence that is not
+        // firing and a tap that is never reaching the system.
+        var tapAttempts = 0
         while (currentCoroutineContext().isActive) {
             val frameStarted = elapsedRealtime()
             val settings = loadSettings()
@@ -233,26 +237,6 @@ class ScriptRunner(
                 }
             }
 
-            // Periodic timing so the user can see where the scan budget goes.
-            if (elapsedRealtime() - lastStatsAt >= STATS_INTERVAL_MS) {
-                lastStatsAt = elapsedRealtime()
-                val scanMs = captureMs + grayMs + matchMs
-                val highlightOffsets = enabledRules.joinToString { rule ->
-                    "${rule.name}(${rule.tapAlignX - rule.alignX}," +
-                        "${rule.tapAlignY - rule.alignY})"
-                }
-                onEvent(
-                    "scan ${scanMs}ms — capture $captureMs, gray $grayMs, match $matchMs, " +
-                        "cadence ${settings.scanIntervalMs}ms " +
-                        "(frame ${frame.width}x${frame.height}, " +
-                        (union?.let { "region ${it.width}x${it.height}" } ?: "no search region") +
-                        ")" +
-                        (lastTapOutcome?.let { "\nLast tap: $it" } ?: "") +
-                        "\nHighlight Δ: $highlightOffsets" +
-                        "\n" + logOutcomes(outcomes, rulesById),
-                )
-            }
-
             // Cadence decisions, then update presence tracking for every rule.
             val hits = mutableListOf<Hit>()
             val now = elapsedRealtime()
@@ -308,6 +292,16 @@ class ScriptRunner(
                 },
             )
 
+            // Say what the scan decided to do before doing it. The panel shows only the
+            // latest event, so a run that stalls between deciding and tapping — or that
+            // never decides at all — otherwise looks exactly like one that is finding
+            // nothing, which is how "it matched 36 and clicked nothing" stayed invisible.
+            if (hits.isNotEmpty()) {
+                val queued = hits.groupingBy { it.rule.name }.eachCount()
+                    .entries.joinToString { (name, count) -> "$name ×$count" }
+                onEvent("Taps queued: $queued")
+            }
+
             // Fire clicks: each waits its own delay±jitter, then taps a random point.
             for (hit in hits) {
                 val bounds = clickBounds(hit.rule, hit.match)
@@ -319,6 +313,10 @@ class ScriptRunner(
                 val waitMs = max(0L, hit.rule.delayMs + jitter)
                 wait(waitMs)
                 val (x, y) = bounds.randomPoint(rng)
+                // Emitted before the injection, not after: if the system never reports the
+                // gesture back, this line is the evidence of where the run stopped.
+                tapAttempts++
+                onEvent("${hit.rule.name}: injecting tap at ($x,$y) — attempt $tapAttempts")
                 val landed = onTap(x, y)
                 val state = states[hit.rule.id]
                 if (landed && hit.rule.cadence == Cadence.REPEAT_WHILE_VISIBLE) {
@@ -330,13 +328,36 @@ class ScriptRunner(
                 }
                 val destination = if (hit.rule.hasDefinedClickArea()) "area" else "match"
                 val tapOutcome = "${hit.rule.name}: $destination bounds=$bounds tap=($x,$y), " +
-                    if (landed) "gesture completed" else "gesture cancelled"
+                    if (landed) "gesture accepted" else "gesture failed (refused or no reply)"
                 lastTapOutcome = tapOutcome
                 writeLog(
                     "rule='${hit.rule.name}' score=${"%.2f".format(hit.match.score)} " +
                         "destination=$destination bounds=$bounds tap=($x,$y) completed=$landed",
                 )
                 onEvent(tapOutcome)
+            }
+
+            // Periodic status, now that this scan's taps have run: the hit count and the
+            // run-wide tap tally are what separate "found nothing" from "found plenty and
+            // never tapped", and the last tap is this scan's rather than a stale one.
+            if (elapsedRealtime() - lastStatsAt >= STATS_INTERVAL_MS) {
+                lastStatsAt = elapsedRealtime()
+                val scanMs = captureMs + grayMs + matchMs
+                val highlightOffsets = enabledRules.joinToString { rule ->
+                    "${rule.name}(${rule.tapAlignX - rule.alignX}," +
+                        "${rule.tapAlignY - rule.alignY})"
+                }
+                onEvent(
+                    "scan ${scanMs}ms — capture $captureMs, gray $grayMs, match $matchMs, " +
+                        "cadence ${settings.scanIntervalMs}ms " +
+                        "(frame ${frame.width}x${frame.height}, " +
+                        (union?.let { "region ${it.width}x${it.height}" } ?: "no search region") +
+                        ")" +
+                        "\nhits ${hits.size}, taps this run $tapAttempts, " +
+                        "last: ${lastTapOutcome ?: "none yet"}" +
+                        "\nHighlight Δ: $highlightOffsets" +
+                        "\n" + logOutcomes(outcomes, rulesById),
+                )
             }
 
             // Hold the scan cadence.

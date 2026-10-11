@@ -307,6 +307,45 @@ class ScriptRunnerIntegrationTest {
     }
 
     @Test
+    fun `a tapped scan reports what it queued and each injection attempt`() {
+        val f = fixture()
+        val a = Point(30, 25)
+        val b = Point(155, 110)
+        val result = execute(rule(f), f.template, listOf(f.capture(f.frame(a, b))))
+
+        assertEquals(2, result.taps.size)
+        assertTrue(result.events.contains("Taps queued: target ×2"))
+        assertEquals(
+            listOf(1, 2),
+            result.events.filter { it.contains("injecting tap at") }
+                .map { it.substringAfter("attempt ").toInt() },
+        )
+    }
+
+    @Test
+    fun `the status line carries the hit count and the run-wide tap tally`() {
+        val f = fixture()
+        val result = execute(rule(f), f.template, listOf(f.capture(f.frame(Point(50, 50)))))
+
+        // Exactly one status line: the fixed test clock never advances past the interval.
+        val status = result.events.single { it.startsWith("scan ") }
+        assertTrue(status, status.contains("hits 1, taps this run 1"))
+        assertTrue(status, status.contains("last: target: match bounds="))
+    }
+
+    @Test
+    fun `a refused gesture is reported as failed, not as completed`() {
+        val f = fixture()
+        val result = execute(
+            rule(f), f.template,
+            listOf(f.capture(f.frame(Point(50, 50)))),
+            tapResult = { false },
+        )
+
+        assertTrue(result.events.any { it.contains("gesture failed (refused or no reply)") })
+    }
+
+    @Test
     fun `once-per-occurrence retries only the failed gesture`() {
         val f = fixture()
         val target = Point(70, 60)

@@ -59,6 +59,64 @@ class TemplateMatcherBenchmarkTest {
         }
     }
 
+    /**
+     * A button-shaped patch: flat face, bright border, darker glyph. Distinct enough that
+     * the matcher has exactly one honest answer per stamped copy.
+     */
+    private fun buttonPatch(w: Int, h: Int, seed: Long): GrayImage {
+        val rng = Random(seed)
+        return GrayImage(w, h, IntArray(w * h) { i ->
+            val x = i % w
+            val y = i / w
+            val border = x < 3 || y < 3 || x >= w - 3 || y >= h - 3
+            val glyph = x in (w / 3) until (2 * w / 3) && y in (h / 3) until (2 * h / 3)
+            when {
+                border -> 230
+                glyph -> 60 + rng.nextInt(0, 40)
+                else -> 150 + (x % 7)
+            }
+        })
+    }
+
+    @Test
+    fun `a field of repeated copies in a screen-sized region stays inside the scan budget`() {
+        // The geometry Justin's phone reports for the StarFarm field: a 1080x2520 frame, a
+        // search region covering most of it (1075x1717) and ~30 copies of the same button on
+        // screen at once. Making every occurrence a real hit (round 13) also made the
+        // per-seed full-resolution refine the dominant cost of a scan — the device report was
+        // "match 5878ms", six times the whole scan interval.
+        val width = 1080
+        val height = 2520
+        val region = PxRect(0, 400, 1075, 2117)
+        val background = noisyScreen(width, height, seed = 45)
+        val template = buttonPatch(200, 180, seed = 11)
+        val px = background.pixels.copyOf()
+        var copies = 0
+        var top = 440
+        while (top + template.height < 2080) {
+            for (col in 0 until 4) {
+                val left = 30 + col * 255
+                for (y in 0 until template.height) for (x in 0 until template.width) {
+                    px[(top + y) * width + left + x] = template[x, y]
+                }
+                copies++
+            }
+            top += 215
+        }
+        val grid = GrayImage(width, height, px)
+
+        TemplateMatcher.search(grid, template, region, 0.9f) // JIT warm-up
+        val start = System.nanoTime()
+        val outcome = TemplateMatcher.search(grid, template, region, 0.9f)
+        val ms = (System.nanoTime() - start) / 1_000_000
+        println("grid copies=$copies match=${ms}ms hits=${outcome.matches.size}")
+        assertTrue(
+            "found ${outcome.matches.size} of $copies copies",
+            outcome.matches.size >= copies - 1,
+        )
+        assertTrue("grid match took ${ms}ms", ms < 1_500)
+    }
+
     @Test
     fun `a faded target over the same region costs the second evidence pass and stays in budget`() {
         // Mid-fade the plain pass is not confident, so the high-pass pass runs at both the
