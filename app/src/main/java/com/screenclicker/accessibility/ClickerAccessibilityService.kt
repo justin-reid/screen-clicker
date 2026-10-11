@@ -34,6 +34,7 @@ import com.screenclicker.model.Script
 import com.screenclicker.overlay.ConfigOverlayService
 import com.screenclicker.overlay.ControlPanelService
 import com.screenclicker.overlay.InstallerWindow
+import com.screenclicker.overlay.RunOverlayLayers
 import com.screenclicker.overlay.TapMark
 import com.screenclicker.store.ScriptStore
 import com.screenclicker.store.SettingsRepo
@@ -259,17 +260,22 @@ class ClickerAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * One place decides whether the overlay is on screen. Hiding is a visibility flip rather
-     * than a window add/remove, which is what makes it safe to do mid-run — and with two
-     * independent switches, the layer stays up while *either* of them has something to draw:
-     * turning the match boxes off must not take the tap markers down with them.
+     * One place decides what the overlay draws and whether it is on screen. Hiding is a
+     * visibility flip rather than a window add/remove, which is what makes it safe to do
+     * mid-run — and with two independent switches, the layer stays up while *either* of them
+     * has something to draw: turning the match boxes off must not take the tap markers down
+     * with them.
+     *
+     * The per-layer decision goes to the view as well as the window's visibility, because
+     * "the window is up for the markers" and "each layer obeys its own switch" are two
+     * different questions. Collapsing them is what kept drawing match boxes with the boxes
+     * switched off (see [com.screenclicker.overlay.RunOverlayLayers]).
      */
     private fun applyOverlayVisibility() {
         val view = overlayView ?: return
-        view.showTaps = tapsWanted
-        view.visibility =
-            if ((detectionsWanted || tapsWanted) && !detectionsMuted) View.VISIBLE
-            else View.INVISIBLE
+        val layers = RunOverlayLayers.of(detectionsWanted, tapsWanted, detectionsMuted)
+        view.layers = layers
+        view.visibility = if (layers.windowVisible) View.VISIBLE else View.INVISIBLE
     }
 
     /**

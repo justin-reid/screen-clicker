@@ -157,6 +157,19 @@ class ConfigOverlayService : Service() {
     /** True when the click-area selector was moved/resized in this editor session. */
     private var clickRegionEdited = false
 
+    /**
+     * True when *any* selector was moved or resized in this editor session.
+     *
+     * The rectangles live in the editor's model space and reach the engine as-is, with the
+     * measured alignment stored alongside to move them into the engine's spaces. A rectangle
+     * authored now is therefore in *now's* space and has to be saved with *now's* alignment;
+     * saving it with an alignment from an earlier session stores the shape of one display in
+     * the coordinates of another. On a foldable, or with a game that hides the status bar for
+     * its own window, the two differ by a status bar's height — which shows up as a click area
+     * that sits somewhere below where it was drawn, and taps that follow it there.
+     */
+    private var rectsEdited = false
+
     // --- alignment, in two coordinate spaces (see the class doc) ---
 
     // As the rule arrived: screenshot space and display space, from an earlier session.
@@ -310,8 +323,10 @@ class ConfigOverlayService : Service() {
 
     private fun initRects() {
         // This service can be reused when the user opens a different rule from the panel;
-        // click-area edits belong only to the rule whose selector was just initialized.
+        // rectangle edits belong only to the rule whose selectors were just initialized —
+        // including for the alignment they are saved with (see [rectsEdited]).
         clickRegionEdited = false
+        rectsEdited = false
         val current = rule ?: return
         ruleAlignX = current.alignX
         ruleAlignY = current.alignY
@@ -491,6 +506,7 @@ class ConfigOverlayService : Service() {
             val updated = applyDrag(before, mode, dx, dy)
             if (updated == before) return
             rects[role] = updated
+            rectsEdited = true
             if (role == RectBubbleView.Role.CLICK) clickRegionEdited = true
             applyRectToBubble()
         }
@@ -1024,18 +1040,22 @@ class ConfigOverlayService : Service() {
                     "(${current.alignX},${current.alignY})",
             )
         }
+        // A new template was cropped this session, so the alignment it was cropped with is the
+        // one to keep — including the window-offset fallback, since the crop used that too. The
+        // same goes for any rectangle authored this session: it is in this session's space, and
+        // keeping an alignment measured in another session's display instead would move it. Both
+        // hold only when this session measured *something*: with no capture at all the values
+        // below are the rule's own and rewriting them is a no-op.
+        val alignmentAuthoritative = templateCapturedThisSession || rectsEdited
         var updated = current.copy(
             // Regions stay in the editor's model space — what the user drew — with the
             // measured alignments stored alongside for the engine to apply.
             searchRegion = rects[RectBubbleView.Role.SEARCH] ?: current.searchRegion,
             templateRegion = rects[RectBubbleView.Role.TEMPLATE] ?: current.templateRegion,
-            // A new template was cropped this session, so the value it was cropped with is the
-            // one to keep — including the window-offset fallback, since the crop used that too.
-            // Without a new template, everything stays exactly as the rule had it.
-            alignX = if (templateCapturedThisSession) alignX else current.alignX,
-            alignY = if (templateCapturedThisSession) alignY else current.alignY,
-            tapAlignX = if (templateCapturedThisSession) tapAlignX else current.tapAlignX,
-            tapAlignY = if (templateCapturedThisSession) tapAlignY else current.tapAlignY,
+            alignX = if (alignmentAuthoritative) alignX else current.alignX,
+            alignY = if (alignmentAuthoritative) alignY else current.alignY,
+            tapAlignX = if (alignmentAuthoritative) tapAlignX else current.tapAlignX,
+            tapAlignY = if (alignmentAuthoritative) tapAlignY else current.tapAlignY,
             frameWidth = if (templateCapturedThisSession) lastFrameWidth else current.frameWidth,
             frameHeight =
                 if (templateCapturedThisSession) lastFrameHeight else current.frameHeight,

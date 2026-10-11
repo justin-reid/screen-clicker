@@ -96,6 +96,25 @@ app/
   about. The calibration feature writes `delayMs` (average human reaction), jitter stays
   separate and small. Per-tap spacing is deliberately not a thing — if it is ever wanted it
   belongs beside `intervalMs`, not on the reaction.
+- **Both overlay switches are enforced per layer, not just on the window.** The window stays
+  up while *either* switch has something to draw, so "this layer is off" cannot be expressed as
+  window visibility. It has to be `RunOverlayLayers.of(detections, taps, muted)` — which is
+  handed to the view, read per layer, and returns false for a layer that is switched off *or*
+  muted. Round 18 added the tap switch and left the rectangle loop drawing unconditionally:
+  with taps on and "Highlight matches" off the window is legitimately visible, so the boxes
+  stayed on screen and the switch looked broken (round 20). A switch that is off must be
+  turned off *in the draw*, not in the window.
+- **A rectangle authored in the editor is in *that session's* display space, so its alignment
+  must be saved with it.** The editor's rectangles reach the engine as model coordinates plus
+  a stored alignment; saving a rectangle drawn in one display state with an alignment measured
+  in another stores one display's shape in another's coordinates. That is a click area which
+  sits below where it was drawn, with every tap following it there — and on a foldable the two
+  states genuinely differ (the WM's idea of the screen and the screenshot size already disagree
+  there; see `adoptMeasuredScreenSize`). Alignment is therefore persisted when a template was
+  cropped *or* any selector was moved this session; a rectangle an earlier session drew must
+  not silently adopt a new offset either. The runner prints the stored click area, the tapAlign
+  it is stored with, and the two combined, once per run — those three numbers are what to read
+  when the amber box is not where it was drawn.
 - **The run overlay has two independent switches, and each is a visibility flip, not a
   window.** Its window is opened for the whole run whatever the settings say; `showDetections`
   (match boxes) and `showTaps` (tap markers) only drive what is drawn and the layer's

@@ -16,6 +16,11 @@ import com.screenclicker.vision.MatchResult
  * layer's visibility, which is what lets either be switched mid-run instead of at the next
  * Start. Both switches are on the floating control panel and on the app's settings screen.
  *
+ * Which layer may paint is decided in one place, [RunOverlayLayers], and read here per layer.
+ * Doing it the other way — one visibility flip for the window and an unconditional rectangle
+ * loop — is what left the match boxes on screen with "Highlight matches" switched off, because
+ * with the tap layer on the window is legitimately visible.
+ *
  * The tap layer answers a question the status line cannot. The panel reports one coordinate at
  * a time, and one coordinate never shows whether the point is drawn at random inside the area
  * or is always the centre. So every injected tap leaves a marker for a couple of seconds, with
@@ -34,8 +39,12 @@ class RunOverlayView(context: Context) : View(context) {
      * The user's "show taps" choice. Set from the main thread while the runner reads nothing
      * here, so the plain @Volatile the match list uses is enough.
      */
+    /**
+     * Which layers may paint. Read on the main thread's draw, written by the service when a
+     * switch is flicked or a capture mutes the layer — hence @Volatile.
+     */
     @Volatile
-    var showTaps: Boolean = false
+    var layers: RunOverlayLayers = RunOverlayLayers.NONE
 
     private val trace = TapTrace()
 
@@ -85,21 +94,24 @@ class RunOverlayView(context: Context) : View(context) {
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        for (match in matches) {
-            val left = match.left.toFloat()
-            val top = match.top.toFloat()
-            val right = (match.left + match.width).toFloat()
-            val bottom = (match.top + match.height).toFloat()
-            canvas.drawRect(left, top, right, bottom, matchFill)
-            canvas.drawRect(left, top, right, bottom, matchStroke)
-            canvas.drawText(
-                "${(match.score * 100).toInt()}%",
-                left + 4f * density,
-                maxOf(14f * density, top - 6f * density),
-                matchText,
-            )
+        val layers = layers
+        if (layers.matches) {
+            for (match in matches) {
+                val left = match.left.toFloat()
+                val top = match.top.toFloat()
+                val right = (match.left + match.width).toFloat()
+                val bottom = (match.top + match.height).toFloat()
+                canvas.drawRect(left, top, right, bottom, matchFill)
+                canvas.drawRect(left, top, right, bottom, matchStroke)
+                canvas.drawText(
+                    "${(match.score * 100).toInt()}%",
+                    left + 4f * density,
+                    maxOf(14f * density, top - 6f * density),
+                    matchText,
+                )
+            }
         }
-        if (!showTaps) return
+        if (!layers.taps) return
         drawTaps(canvas)
     }
 

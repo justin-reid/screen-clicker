@@ -205,6 +205,21 @@ class ScriptRunner(
                             "(${rule.tapAlignX - rule.alignX},${rule.tapAlignY - rule.alignY}), " +
                             "drawn at (${rule.searchRegion.left},${rule.searchRegion.top})",
                     )
+                    // A rule that presses a shared area is the one case where the tap does not
+                    // follow the match, so the area it will really press is worth stating in
+                    // full: the stored rectangle, the alignment it is stored with, and the two
+                    // combined. Those are three different numbers exactly when the rectangle was
+                    // authored in one display state and saved with an alignment measured in
+                    // another, which puts the amber box — and every tap drawn from it —
+                    // somewhere the user never drew.
+                    val area = if (rule.hasDefinedClickArea()) rule.clickRegion else null
+                    if (area != null) {
+                        onEvent(
+                            "'${rule.name}': click area $area tapAlign " +
+                                "(${rule.tapAlignX},${rule.tapAlignY}) -> " +
+                                area.translated(rule.tapAlignX, rule.tapAlignY),
+                        )
+                    }
                 }
             }
             val union = regions.values.reduceOrNull { a, b -> a.union(b) }
