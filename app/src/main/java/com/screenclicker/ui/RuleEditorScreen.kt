@@ -50,6 +50,7 @@ import com.screenclicker.accessibility.ClickerAccessibilityService
 import com.screenclicker.model.Cadence
 import com.screenclicker.model.ClickMode
 import com.screenclicker.model.PxRect
+import com.screenclicker.model.RegionClickCount
 import com.screenclicker.model.Rule
 import com.screenclicker.overlay.ConfigOverlayService
 import com.screenclicker.store.ScriptStore
@@ -363,6 +364,30 @@ fun RuleEditorScreen(
                     RegionFields(
                         rect = editing.clickRegion ?: PxRect(0, 0, 0, 0),
                         onChange = { r -> update { it.copy(clickRegion = r) } },
+                    )
+                    Text("How many clicks into that area", style = MaterialTheme.typography.titleSmall)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = editing.regionClickCount == RegionClickCount.SINGLE,
+                            onClick = {
+                                update { it.copy(regionClickCount = RegionClickCount.SINGLE) }
+                            },
+                            label = { Text("One click", maxLines = 2) },
+                        )
+                        FilterChip(
+                            selected = editing.regionClickCount == RegionClickCount.PER_OCCURRENCE,
+                            onClick = {
+                                update { it.copy(regionClickCount = RegionClickCount.PER_OCCURRENCE) }
+                            },
+                            label = { Text("One per match", maxLines = 2) },
+                        )
+                    }
+                    Text(
+                        text = "One click: the area is a button and is pressed once, even when " +
+                            "the image is found in several places at once. One per match: every " +
+                            "match taps the area, so three matches in one scan are three taps " +
+                            "(for a button that fills one of the found slots per press).",
+                        style = MaterialTheme.typography.bodySmall,
                     )
                 }
                 NumberField("Delay before click (ms)", editing.delayMs) { v ->

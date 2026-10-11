@@ -26,6 +26,7 @@ class ScriptModelTest {
         assertTrue(rule.enabled)
         assertEquals(0.90f, rule.threshold, 0f)
         assertEquals(ClickMode.ON_IMAGE, rule.clickMode)
+        assertEquals(RegionClickCount.SINGLE, rule.regionClickCount)
         assertEquals(Cadence.ONCE_PER_APPEARANCE, rule.cadence)
         assertEquals(1_000L, rule.intervalMs)
         assertNull(rule.templateFile)
@@ -95,6 +96,7 @@ class ScriptModelTest {
             threshold = 0.87f,
             clickMode = ClickMode.ON_REGION,
             clickRegion = PxRect(50, 60, 70, 80),
+            regionClickCount = RegionClickCount.PER_OCCURRENCE,
             delayMs = 123,
             jitterMs = 17,
             cadence = Cadence.REPEAT_WHILE_VISIBLE,
@@ -113,6 +115,7 @@ class ScriptModelTest {
         val decoded = json.decodeFromString<Script>(encoded)
         assertEquals(script, decoded)
         assertEquals(ClickMode.ON_REGION, decoded.rules.single().clickMode)
+        assertEquals(RegionClickCount.PER_OCCURRENCE, decoded.rules.single().regionClickCount)
         assertEquals(Cadence.REPEAT_WHILE_VISIBLE, decoded.rules.single().cadence)
     }
 

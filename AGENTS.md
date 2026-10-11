@@ -75,6 +75,14 @@ app/
   `dispatchGesture` expects the same space; never mix in dp. Config data stores px rects
   captured at config time. If the display size changes (rotation, resolution setting),
   scripts captured for the old geometry are stale — re-configure rather than scale.
+- **A defined click area presses once, or once per find.** `Rule.regionClickCount`
+  (`SINGLE`, the default) collapses a frame's occurrences to a single tap on the area, so
+  the rule behaves as one switch: three matches in one scan are one press, and
+  repeat-while-visible presses once per interval rather than once per match.
+  `PER_OCCURRENCE` taps the area for every match (N finds ⇒ N presses) — for an area that
+  is a button filling one of the found slots per press. Ignored for `ON_IMAGE`, where each
+  find taps itself. Detection and highlights are unaffected: every occurrence is still
+  found, drawn, and counted, whatever the tap count.
 - **Tap points are randomized inside the click bounds with an inset** (≈10% of the
   smaller dimension) so a tap can never land exactly on a rect edge, and so consecutive
   taps almost never repeat. The randomness is per-tap, not per-detection.

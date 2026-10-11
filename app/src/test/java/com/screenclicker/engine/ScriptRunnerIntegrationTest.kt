@@ -6,6 +6,7 @@ import com.screenclicker.model.Cadence
 import com.screenclicker.model.ClickMode
 import com.screenclicker.model.GlobalSettings
 import com.screenclicker.model.PxRect
+import com.screenclicker.model.RegionClickCount
 import com.screenclicker.model.Rule
 import com.screenclicker.model.Script
 import com.screenclicker.vision.GrayImage
@@ -128,6 +129,7 @@ class ScriptRunnerIntegrationTest {
         fixture: Fixture,
         clickMode: ClickMode = ClickMode.ON_IMAGE,
         clickRegion: PxRect? = null,
+        regionClickCount: RegionClickCount = RegionClickCount.SINGLE,
         cadence: Cadence = Cadence.ONCE_PER_APPEARANCE,
         intervalMs: Long = 1_000,
         threshold: Float = 0.9f,
@@ -153,6 +155,7 @@ class ScriptRunnerIntegrationTest {
         threshold = threshold,
         clickMode = clickMode,
         clickRegion = clickRegion,
+        regionClickCount = regionClickCount,
         delayMs = 0,
         jitterMs = 0,
         cadence = cadence,
@@ -171,18 +174,117 @@ class ScriptRunnerIntegrationTest {
             f,
             clickMode = ClickMode.ON_REGION,
             clickRegion = clickArea,
+            regionClickCount = RegionClickCount.PER_OCCURRENCE,
             tapAlignX = 3,
             tapAlignY = 2,
         )
 
         val result = execute(rule, f.template, listOf(populated, populated, empty, populated))
 
-        // First appearance clicks each occurrence; the unchanged second frame does not. Both
-        // disappear and return, so both are a new appearance and get clicked again.
+        // "One per match": the first appearance clicks each occurrence; the unchanged second
+        // frame does not. Both disappear and return, so both are a new appearance and get
+        // clicked again.
         assertEquals(4, result.taps.size)
         assertTrue(result.taps.all { it.x in 153 until 223 && it.y in 122 until 177 })
         assertEquals(listOf(2, 2, 0, 2), result.detections.map { it.size })
         assertEquals(4, result.captures)
+    }
+
+    @Test
+    fun `single area click presses the configured area once for several simultaneous finds`() {
+        val f = fixture()
+        val a = Point(24, 30)
+        val b = Point(160, 112)
+        val populated = f.capture(f.frame(a, b))
+        val empty = f.capture(f.frame())
+        val clickArea = PxRect(150, 120, 220, 175)
+        val rule = rule(
+            f,
+            clickMode = ClickMode.ON_REGION,
+            clickRegion = clickArea,
+            regionClickCount = RegionClickCount.SINGLE,
+        )
+
+        val result = execute(rule, f.template, listOf(populated, populated, empty, populated))
+
+        // The area is one button: two finds in the frame are one press, a still screen is
+        // none, and the pair returning is one press again. Both occurrences are still found
+        // and highlighted every frame.
+        assertEquals(2, result.taps.size)
+        assertTrue(result.taps.all { it.x in 150 until 220 && it.y in 120 until 175 })
+        assertEquals(listOf(2, 2, 0, 2), result.detections.map { it.size })
+    }
+
+    @Test
+    fun `single area click repeats once per interval while anything still matches`() {
+        val f = fixture()
+        val a = Point(30, 25)
+        val b = Point(155, 110)
+        val both = f.capture(f.frame(a, b))
+        val onlyB = f.capture(f.frame(b))
+        var time = 0L
+        val result = execute(
+            rule(
+                f,
+                clickMode = ClickMode.ON_REGION,
+                clickRegion = PxRect(150, 120, 220, 175),
+                regionClickCount = RegionClickCount.SINGLE,
+                cadence = Cadence.REPEAT_WHILE_VISIBLE,
+                intervalMs = 100,
+            ),
+            f.template,
+            listOf(both, onlyB, onlyB, both),
+            clock = { time },
+            onCapture = { time += 50 },
+        )
+
+        // The rule is one switch: it presses the area at 50ms and again at 150ms, and the
+        // second occurrence coming and going does not earn an extra press of its own.
+        assertEquals(2, result.taps.size)
+        assertEquals(listOf(2, 1, 1, 2), result.detections.map { it.size })
+    }
+
+    @Test
+    fun `single area click retries a refused gesture once without pressing for the other finds`() {
+        val f = fixture()
+        val a = Point(30, 25)
+        val b = Point(155, 110)
+        var calls = 0
+        val both = f.capture(f.frame(a, b))
+        val result = execute(
+            rule(
+                f,
+                clickMode = ClickMode.ON_REGION,
+                clickRegion = PxRect(150, 120, 220, 175),
+                regionClickCount = RegionClickCount.SINGLE,
+            ),
+            f.template,
+            listOf(both, both, both),
+            tapResult = { calls++; calls != 1 },
+        )
+
+        // The first press is refused, so it is retried next frame; the two occurrences share
+        // one press, so the retry is one tap rather than one per find.
+        assertEquals(2, result.taps.size)
+    }
+
+    @Test
+    fun `image click mode ignores the area click count and taps each occurrence`() {
+        val f = fixture()
+        val a = Point(30, 25)
+        val b = Point(155, 110)
+        val result = execute(
+            rule(
+                f,
+                clickMode = ClickMode.ON_IMAGE,
+                regionClickCount = RegionClickCount.SINGLE,
+            ),
+            f.template,
+            listOf(f.capture(f.frame(a, b))),
+        )
+
+        // The setting only describes a shared area; with no area, every find taps itself.
+        assertEquals(2, result.taps.size)
     }
 
     @Test

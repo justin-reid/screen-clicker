@@ -14,6 +14,30 @@ enum class ClickMode {
 }
 
 /**
+ * For a rule that taps a defined click area ([ClickMode.ON_REGION]): how many of the
+ * occurrences found in one frame turn into taps on that shared area.
+ *
+ * Ignored for ON_IMAGE, where a tap is the match itself and each occurrence is by
+ * definition its own target.
+ */
+@Serializable
+enum class RegionClickCount {
+    /**
+     * One tap per matched occurrence: a frame that finds three identical cells taps the area
+     * three times. Useful when the area is a button that fills one of the found slots per
+     * press, so N finds need N presses.
+     */
+    PER_OCCURRENCE,
+
+    /**
+     * One tap per appearance, however many occurrences the frame found: the area is a single
+     * button and is pressed once. Repeat-while-visible presses it once per interval while
+     * anything still matches.
+     */
+    SINGLE,
+}
+
+/**
  * When a matching rule may click again.
  *
  * ONCE_PER_APPEARANCE is the default: each distinct matched location fires once when it
@@ -88,6 +112,11 @@ data class Rule(
     val threshold: Float = 0.90f,
     val clickMode: ClickMode = ClickMode.ON_IMAGE,
     val clickRegion: PxRect? = null,
+    /**
+     * For ON_REGION, whether each matched occurrence taps [clickRegion] or the area is
+     * pressed once per appearance no matter how many occurrences were found.
+     */
+    val regionClickCount: RegionClickCount = RegionClickCount.SINGLE,
     /** Wait between detection and tap; the reaction-time calibration sets the default. */
     val delayMs: Long = 0,
     /** Random fuzz applied to [delayMs]: effective delay = delay ± random(jitter). */

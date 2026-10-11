@@ -7,6 +7,7 @@ import com.screenclicker.capture.ScreenCapturer
 import com.screenclicker.model.Cadence
 import com.screenclicker.model.ClickMode
 import com.screenclicker.model.PxRect
+import com.screenclicker.model.RegionClickCount
 import com.screenclicker.model.Rule
 import com.screenclicker.model.Script
 import com.screenclicker.vision.GrayImage
@@ -25,12 +26,24 @@ internal fun Rule.hasDefinedClickArea(): Boolean =
         clickRegion?.let { it.width > 0 && it.height > 0 } == true
 
 /**
+ * True when this rule's defined area should be pressed once per appearance rather than once
+ * per matched occurrence. Detection and highlights are unaffected either way; this only
+ * decides how many finds turn into taps on the one shared area.
+ */
+internal fun Rule.pressesRegionOnce(): Boolean =
+    hasDefinedClickArea() && regionClickCount == RegionClickCount.SINGLE
+
+/**
  * The scan-and-click loop.
  *
  * One frame per iteration: capture the screen (the capturer owns its own throttling),
  * match every enabled rule inside its own search region, then for each rule whose
  * cadence allows a click right now: wait delay±jitter and tap a random point inside
  * the click bounds. Rules are independent — several may fire in the same frame.
+ *
+ * A rule whose destination is one shared area can also be told to press it once per
+ * appearance rather than once per find (see [pressesRegionOnce]); then it behaves as a
+ * single switch even while several occurrences of its template are on screen.
  *
  * Templates are decoded once per run (PNG decode per frame would eat the scan budget).
  *
@@ -245,7 +258,15 @@ class ScriptRunner(
             val now = elapsedRealtime()
             for (rule in enabledRules) {
                 val state = states.getOrPut(rule.id) { RuleState() }
-                val present = matches[rule.id].orEmpty()
+                // A rule that presses one shared area once per appearance is a single switch,
+                // not one switch per occurrence: collapse the frame's finds to one tracked
+                // location so cadence, repeat interval, and gesture retry all key on the rule
+                // as a whole. Detection and highlights still see every occurrence.
+                val present = if (rule.pressesRegionOnce()) {
+                    matches[rule.id].orEmpty().take(1).map { it.atTrackedGroupLocation() }
+                } else {
+                    matches[rule.id].orEmpty()
+                }
                 when (rule.cadence) {
                     Cadence.ONCE_PER_APPEARANCE -> {
                         for (match in present) {
@@ -333,6 +354,14 @@ class ScriptRunner(
         return kotlin.math.abs(a.left - b.left) < separation &&
             kotlin.math.abs(a.top - b.top) < separation
     }
+
+    /**
+     * The one location a "press the area once" rule keys its cadence on, in place of the
+     * per-occurrence locations it found. The position itself is unused — the tap goes to the
+     * configured area either way — it only has to be the same every frame.
+     */
+    private fun MatchResult.atTrackedGroupLocation(): MatchResult =
+        if (left == 0 && top == 0) this else copy(left = 0, top = 0)
 
     private fun sameOccurrence(location: Pair<Int, Int>, match: MatchResult): Boolean =
         sameOccurrence(
