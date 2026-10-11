@@ -138,6 +138,7 @@ class ControlPanelService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var store: ScriptStore
     private lateinit var windowManager: WindowManager
+    private val settingsRepo: SettingsRepo by lazy { SettingsRepo(this) }
 
     private var panelView: ControlPanelView? = null
     private var params: WindowManager.LayoutParams? = null
@@ -279,6 +280,9 @@ class ControlPanelService : Service() {
                 rules = rules,
                 lastEvent = ClickerAccessibilityService.lastRunnerEvent.value,
                 accessibilityOn = accessibilityOn,
+                // Read live rather than cached, so the app's own switch and this one can
+                // never disagree about whether rectangles are being drawn.
+                detectionsShown = settingsRepo.load().showDetections,
             ),
         )
         // Runner events arrive several times a second; only re-measure when something
@@ -370,6 +374,15 @@ class ControlPanelService : Service() {
                 return
             }
             ConfigOverlayService.start(this@ControlPanelService, ruleId)
+        }
+
+        override fun onToggleDetections() {
+            val repo = settingsRepo
+            val next = !repo.load().showDetections
+            repo.save(repo.load().copy(showDetections = next))
+            // Applied to the running script immediately; the layer is a visibility flip.
+            ClickerAccessibilityService.setDetectionsEnabled(next)
+            render()
         }
 
         override fun onOpenApp() {

@@ -266,6 +266,28 @@ class CaptureProjectionService : Service() {
         val buffer = plane.buffer
         val pixelStride = plane.pixelStride
         val rowStride = plane.rowStride
+        // The usual case is a tightly packed RGBA row, and then one bulk read per row beats
+        // three absolute ByteBuffer.get calls per pixel — 8M of them for a 1080x2520 frame,
+        // on the path between a frame appearing and the scan loop being able to see it. The
+        // per-pixel path stays for the strided layouts this does not cover.
+        val rowBytes = width * 4
+        if (pixelStride == 4 && rowStride >= rowBytes) {
+            val row = ByteArray(rowBytes)
+            for (y in 0 until height) {
+                buffer.position(y * rowStride)
+                buffer.get(row, 0, rowBytes)
+                val outBase = y * width
+                var i = 0
+                for (x in 0 until width) {
+                    argb[outBase + x] = (0xFF shl 24) or
+                        ((row[i].toInt() and 0xFF) shl 16) or
+                        ((row[i + 1].toInt() and 0xFF) shl 8) or
+                        (row[i + 2].toInt() and 0xFF)
+                    i += 4
+                }
+            }
+            return Frame(argb, width, height, SystemClock.uptimeMillis())
+        }
         for (y in 0 until height) {
             val rowBase = y * rowStride
             val outBase = y * width

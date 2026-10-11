@@ -51,4 +51,9 @@
     <string name="panel_accessibility_off">Accessibility service is OFF — nothing can be tapped. Enable it below.</string>
     <string name="panel_needs_accessibility">Enable the Screen Clicker accessibility service first</string>
     <string name="panel_needs_overlay_permission">Allow "display over other apps" to edit rules on screen</string>
+    <!-- Floating-panel switch for the match rectangles. Same setting as the app's
+         "Highlight matches while running"; it applies immediately, mid-run. -->
+    <string name="panel_detections">Highlight matches</string>
+    <string name="panel_toggle_on">On</string>
+    <string name="panel_toggle_off">Off</string>
 </resources>

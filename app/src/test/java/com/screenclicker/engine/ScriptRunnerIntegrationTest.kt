@@ -92,6 +92,8 @@ class ScriptRunnerIntegrationTest {
         tapResult: (Point) -> TapOutcome = { TapOutcome.DELIVERED },
         foregroundPackage: () -> String? = { null },
         targetPackage: String? = null,
+        /** Records the delays the runner asks for instead of actually waiting them. */
+        waitTo: (Long) -> Unit = {},
     ): RunResult {
         val capturer = SequenceCapturer(frames, onCapture)
         val taps = mutableListOf<Point>()
@@ -101,7 +103,7 @@ class ScriptRunnerIntegrationTest {
             loadSettings = { settings },
             capturer = capturer,
             elapsedRealtime = clock,
-            wait = {},
+            wait = waitTo,
             writeLog = {},
         )
         try {
@@ -323,6 +325,48 @@ class ScriptRunnerIntegrationTest {
     }
 
     @Test
+    fun `one reaction delay covers a whole frame of finds`() {
+        val f = fixture()
+        val points = listOf(Point(15, 14), Point(95, 70), Point(190, 145))
+        val waits = mutableListOf<Long>()
+        val result = execute(
+            rule(f).copy(delayMs = 200, jitterMs = 50),
+            f.template,
+            listOf(f.capture(f.frame(*points.toTypedArray()))),
+            waitTo = { waits += it },
+        )
+
+        // Three finds in one frame are one thing seen: one reaction, then three taps going
+        // out back to back. Paying the delay per occurrence is what made a run's reaction
+        // time scale with how much it found — tens of seconds for a full grid.
+        //
+        // Only the reaction is a positive wait; the frozen test clock also makes the scan
+        // cadence contribute a zero-length wait of its own every iteration.
+        assertEquals(3, result.taps.size)
+        val reactions = waits.filter { it > 0 }
+        assertEquals(1, reactions.size)
+        val onlyWait = reactions.single()
+        assertTrue("wait was $onlyWait", onlyWait in 150..250)
+    }
+
+    @Test
+    fun `no reaction delay is paid when a scan finds nothing`() {
+        val f = fixture()
+        val waits = mutableListOf<Long>()
+        val result = execute(
+            rule(f).copy(delayMs = 200, jitterMs = 50),
+            f.template,
+            listOf(f.capture(f.frame())),
+            waitTo = { waits += it },
+        )
+
+        // The waiting is a reaction to something seen; an empty frame has nothing to react
+        // to, and only the frozen clock's zero-length cadence wait is left.
+        assertTrue(result.taps.isEmpty())
+        assertTrue("waits $waits", waits.all { it == 0L })
+    }
+
+    @Test
     fun `the status line carries the hit count and the run-wide tap tally`() {
         val f = fixture()
         val result = execute(rule(f), f.template, listOf(f.capture(f.frame(Point(50, 50)))))
@@ -331,6 +375,9 @@ class ScriptRunnerIntegrationTest {
         val status = result.events.single { it.startsWith("scan ") }
         assertTrue(status, status.contains("hits 1, taps this run 1"))
         assertTrue(status, status.contains("last: target: match bounds="))
+        // The tap burst has its own number now: it used to be invisible inside "scan", which
+        // is how a run whose taps cost more than its capture and matching looked fast.
+        assertTrue(status, status.contains("taps 0ms"))
     }
 
     @Test

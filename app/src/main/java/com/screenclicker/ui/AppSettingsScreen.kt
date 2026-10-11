@@ -111,12 +111,24 @@ fun AppSettingsScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
                 ) {
-                    Text("Show detections while running")
+                    Text("Highlight matches while running")
                     Switch(
                         checked = settings.showDetections,
-                        onCheckedChange = { on -> save(settings.copy(showDetections = on)) },
+                        onCheckedChange = { on ->
+                            save(settings.copy(showDetections = on))
+                            // Applied now, not at the next Start: the highlight layer is a
+                            // visibility flip while a run is going.
+                            ClickerAccessibilityService.setDetectionsEnabled(on)
+                        },
                     )
                 }
+                Text(
+                    text = "Draws a box and a score over every image the running script " +
+                        "matches. Useful while setting a rule up, and clutter once it works — "
+                        + "the floating panel has the same switch, so it can be changed " +
+                        "without opening the app.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
         }
 

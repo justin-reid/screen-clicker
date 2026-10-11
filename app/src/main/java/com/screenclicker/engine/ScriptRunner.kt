@@ -300,18 +300,29 @@ class ScriptRunner(
                 val queued = hits.groupingBy { it.rule.name }.eachCount()
                     .entries.joinToString { (name, count) -> "$name ×$count" }
                 onEvent("Taps queued: $queued")
-            }
 
-            // Fire clicks: each waits its own delay±jitter, then taps a random point.
-            for (hit in hits) {
-                val bounds = clickBounds(hit.rule, hit.match)
-                val jitter = if (hit.rule.jitterMs > 0) {
-                    rng.nextLong(-hit.rule.jitterMs, hit.rule.jitterMs + 1)
+                // One reaction per scan, not one reaction per occurrence. delayMs is the
+                // time between seeing something and acting on it, and a frame full of
+                // matches is one thing seen. Paying it per find made a run's reaction time
+                // scale with how much it found: a grid of twenty cells spent twenty delays
+                // before the loop could so much as look at the screen again, which is
+                // exactly the "it takes five or six seconds" report. The slowest firing
+                // rule sets the frame's reaction; the other finds go out with it.
+                val reaction = hits.maxByOrNull { it.rule.delayMs }!!
+                val jitterSpan = reaction.rule.jitterMs
+                val jitter = if (jitterSpan > 0) {
+                    rng.nextLong(-jitterSpan, jitterSpan + 1)
                 } else {
                     0L
                 }
-                val waitMs = max(0L, hit.rule.delayMs + jitter)
-                wait(waitMs)
+                wait(max(0L, reaction.rule.delayMs + jitter))
+            }
+
+            // Fire the queued taps back to back. The wait above was the frame's reaction;
+            // what is left per tap is only the system's own gesture round trip.
+            val burstStarted = elapsedRealtime()
+            for (hit in hits) {
+                val bounds = clickBounds(hit.rule, hit.match)
                 val (x, y) = bounds.randomPoint(rng)
                 // Emitted before the injection, not after: if the system never reports the
                 // gesture back, this line is the evidence of where the run stopped.
@@ -338,6 +349,10 @@ class ScriptRunner(
                 )
                 onEvent(tapOutcome)
             }
+            // What the taps themselves cost, apart from the reaction above. The scan line
+            // used to add up to "capture + gray + match" and call that the scan, which hid
+            // a tap burst that could be several times longer than the whole scan.
+            val tapBurstMs = if (hits.isEmpty()) 0L else elapsedRealtime() - burstStarted
 
             // Periodic status, now that this scan's taps have run: the hit count and the
             // run-wide tap tally are what separate "found nothing" from "found plenty and
@@ -351,7 +366,7 @@ class ScriptRunner(
                 }
                 onEvent(
                     "scan ${scanMs}ms — capture $captureMs, gray $grayMs, match $matchMs, " +
-                        "cadence ${settings.scanIntervalMs}ms " +
+                        "taps ${tapBurstMs}ms, cadence ${settings.scanIntervalMs}ms " +
                         "(frame ${frame.width}x${frame.height}, " +
                         (union?.let { "region ${it.width}x${it.height}" } ?: "no search region") +
                         ")" +

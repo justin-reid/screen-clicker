@@ -34,6 +34,7 @@ class ControlPanelView(
         fun onToggleScript(scriptId: String)
         fun onExpandScript(scriptId: String)
         fun onEditRule(scriptId: String, ruleId: String)
+        fun onToggleDetections()
         fun onOpenApp()
         fun onHide()
         fun onEnableAccess()
@@ -51,6 +52,8 @@ class ControlPanelView(
         val rules: List<RuleRow> = emptyList(),
         val lastEvent: String? = null,
         val accessibilityOn: Boolean = true,
+        /** Whether the match rectangles are being drawn; drives the panel's own switch. */
+        val detectionsShown: Boolean = true,
     )
 
     private val density = resources.displayMetrics.density
@@ -215,6 +218,7 @@ class ControlPanelView(
             state.expandedScriptId,
             state.rules,
             state.accessibilityOn,
+            state.detectionsShown,
         )
         if (structural == structuralKey) return false
         structuralKey = structural
@@ -248,6 +252,37 @@ class ControlPanelView(
             enable.setTextColor(0xFFFFAB91.toInt())
             content.addView(enable, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         }
+
+        // The match rectangles are the one thing worth switching off mid-run: they earn
+        // their keep while a rule is being set up and are clutter once it works. Same
+        // setting as the app's screen, applied the moment it is tapped.
+        val detectionRow = LinearLayout(context).apply { orientation = HORIZONTAL }
+        detectionRow.addView(
+            TextView(context).apply {
+                text = context.getString(com.screenclicker.R.string.panel_detections)
+                setTextColor(0xFFCFD8DC.toInt())
+                textSize = 12f
+                gravity = Gravity.CENTER_VERTICAL
+            },
+            LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f),
+        )
+        val detectionToggle = textButton(
+            context.getString(
+                if (state.detectionsShown) {
+                    com.screenclicker.R.string.panel_toggle_on
+                } else {
+                    com.screenclicker.R.string.panel_toggle_off
+                },
+            ),
+        ) { callbacks.onToggleDetections() }
+        detectionToggle.setTextColor(
+            if (state.detectionsShown) 0xFFA5D6A7.toInt() else 0xFFFFAB91.toInt(),
+        )
+        detectionRow.addView(detectionToggle)
+        content.addView(
+            detectionRow,
+            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT),
+        )
 
         val footer = LinearLayout(context).apply { orientation = HORIZONTAL }
         footer.addView(textButton(context.getString(com.screenclicker.R.string.panel_open_app)) {

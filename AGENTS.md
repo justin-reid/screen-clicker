@@ -86,9 +86,27 @@ app/
 - **Tap points are randomized inside the click bounds with an inset** (≈10% of the
   smaller dimension) so a tap can never land exactly on a rect edge, and so consecutive
   taps almost never repeat. The randomness is per-tap, not per-detection.
-- **Delay + jitter:** effective delay = `delayMs + U(-jitterMs, +jitterMs)`, clamped ≥ 0.
-  The calibration feature writes `delayMs` (average human reaction), jitter stays
-  separate and small.
+- **Delay + jitter is one reaction per scan, not one per tap.** Effective delay =
+  `delayMs + U(-jitterMs, +jitterMs)`, clamped ≥ 0, and it is paid *once* whenever a scan
+  decided to click something — the slowest firing rule's value — after which every queued tap
+  goes out back to back. A frame full of matches is one thing seen, so charging the delay per
+  occurrence made a run's reaction time scale with how much it found: a twenty-cell grid spent
+  twenty delays (five or six seconds) before the loop could so much as look at the screen
+  again, which is what the "other clickers detect in milliseconds" comparison was really
+  about. The calibration feature writes `delayMs` (average human reaction), jitter stays
+  separate and small. Per-tap spacing is deliberately not a thing — if it is ever wanted it
+  belongs beside `intervalMs`, not on the reaction.
+- **The detection highlight layer is a visibility flip, not a window.** Its window is opened
+  for the whole run whatever the setting says, and `showDetections` only drives its
+  `visibility`. That is what makes toggling it mid-run work — the floating panel and the
+  settings screen both do. Adding or removing the window mid-run would leave the runner's
+  captured `detectionGen` stale and paint nothing. `detectionsWanted` (the user's choice) and
+  `detectionsMuted` (our own windows standing the layer down for a template capture, the
+  installer, or the consent dialog) are separate on purpose: un-muting must never switch
+  rectangles back on for someone who turned them off.
+- **The periodic status line accounts for the tap burst separately** (`scan … capture … gray …
+  match … taps Nms`). `scan` used to mean capture + gray + match and was reported as the whole
+  cost of an iteration, which hid a tap burst several times longer than the scan itself.
 
 ## Data
 

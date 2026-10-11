@@ -148,10 +148,25 @@ class ClickerAccessibilityService : AccessibilityService() {
 
         /**
          * Temporarily hides the detection highlight layer so it cannot appear inside a
-         * screenshot taken by the rule editor. Must be called from the main thread.
+         * screenshot taken by the rule editor, or while the system's consent dialog is up.
+         *
+         * Independent of the user's own choice: this only *mutes*, it never forces the
+         * rectangles back on for someone who turned them off. Must be called from the main
+         * thread.
          */
         fun setDetectionLayerVisible(visible: Boolean) {
-            instance?.detectionView?.visibility = if (visible) View.VISIBLE else View.INVISIBLE
+            instance?.setDetectionsMuted(!visible)
+        }
+
+        /**
+         * Turns the match rectangles on or off *now*, without restarting the run.
+         *
+         * The layer's window lives for the whole run (see [beginRun]), so this is a plain
+         * visibility flip. Reading the setting only when the run started is what made a
+         * mid-run change look like it did nothing.
+         */
+        fun setDetectionsEnabled(enabled: Boolean) {
+            instance?.setDetectionsWanted(enabled)
         }
 
         /** Opens the system Recents — how the rule editor lets the user switch apps. */
@@ -183,17 +198,51 @@ class ClickerAccessibilityService : AccessibilityService() {
     private var runnerJob: Job? = null
 
     /**
-     * Detection highlights overlay; present only while a script runs with it enabled.
+     * Detection highlights overlay. Its window is opened for the whole run whatever the
+     * setting says; the setting only drives its visibility, which is what lets the
+     * rectangles be turned off (or back on) without a restart.
+     *
      * Generations guard a restart race: the old run's finally must not tear down the
      * new run's window when a script is restarted while already running.
-     */
-    /**
+     *
      * Written on the main thread, read from the runner's background dispatcher — hence
      * @Volatile, which is what makes the update visible to the scan loop at all.
      */
     @Volatile
     private var detectionView: com.screenclicker.overlay.DetectionHighlightView? = null
     private var detectionGeneration = 0
+
+    /** The user's choice about drawing match rectangles; read live, not only at Start. */
+    @Volatile
+    private var detectionsWanted = false
+
+    /**
+     * Set by our own windows while they need the layer out of the way (a template capture,
+     * the installer, the capture-consent dialog). Kept apart from [detectionsWanted] so that
+     * un-muting can never switch rectangles back on for someone who turned them off.
+     */
+    @Volatile
+    private var detectionsMuted = false
+
+    private fun setDetectionsMuted(muted: Boolean) {
+        detectionsMuted = muted
+        applyDetectionVisibility()
+    }
+
+    private fun setDetectionsWanted(wanted: Boolean) {
+        detectionsWanted = wanted
+        applyDetectionVisibility()
+    }
+
+    /**
+     * One place decides whether match rectangles are on screen. Hiding is a visibility flip
+     * rather than a window add/remove, which is what makes it safe to do mid-run.
+     */
+    private fun applyDetectionVisibility() {
+        val view = detectionView ?: return
+        view.visibility =
+            if (detectionsWanted && !detectionsMuted) View.VISIBLE else View.INVISIBLE
+    }
 
     /**
      * True while the system's package installer is the window on screen. See
@@ -361,8 +410,12 @@ class ClickerAccessibilityService : AccessibilityService() {
         val context = this
         // The highlight window must be added from the main thread; everything else the
         // run needs (script JSON, template PNGs) is loaded below, off it.
-        val detectionGen =
-            if (SettingsRepo(context).load().showDetections) showDetectionOverlay() else -1
+        //
+        // The window is opened for the whole run whatever the setting says, and the setting
+        // only drives its visibility: that is what lets rectangles be turned off (or back
+        // on) mid-run instead of at the next Start.
+        detectionsWanted = SettingsRepo(context).load().showDetections
+        val detectionGen = showDetectionOverlay()
         // The scan loop (screenshot copy, grayscale, matching) is CPU-bound and must not
         // run on the main thread: it used to, which froze the UI and our own overlays for
         // most of every scan interval. Only the overlay calls below hop back to main.
@@ -458,10 +511,10 @@ class ClickerAccessibilityService : AccessibilityService() {
         )
         try {
             getSystemService(WindowManager::class.java)!!.addView(view, params)
-            // A run started while the installer is up gets the layer hidden from the start,
-            // not just muted once the installer leaves.
-            view.visibility = if (installerUp) View.INVISIBLE else View.VISIBLE
             detectionView = view
+            // A run started while the installer is up, or with the setting off, gets the
+            // layer hidden from the start rather than only once something changes.
+            applyDetectionVisibility()
         } catch (e: Exception) {
             Log.w(TAG, "detection overlay unavailable", e)
         }
