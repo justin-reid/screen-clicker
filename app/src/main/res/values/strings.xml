@@ -18,7 +18,9 @@
 
     <string name="overlay_editor_title">Rule editor — drag by this bar</string>
     <string name="overlay_role_search">Search area</string>
-    <string name="overlay_role_template">Capture area</string>
+    <!-- Area boxes get nouns ("Template area"); "Capture" stays reserved for the
+         action button that grabs the pixels (overlay_capture). -->
+    <string name="overlay_role_template">Template area</string>
     <string name="overlay_role_click">Click area</string>
     <string name="overlay_capture">Capture</string>
     <string name="overlay_check">Check</string>
@@ -33,7 +35,7 @@
          installer is on screen: our overlays step aside so its buttons can be tapped. -->
     <string name="installer_stand_down">Installer open — overlays hidden, taps paused</string>
     <string name="installer_resumed">Installer closed — overlays and taps back</string>
-    <string name="overlay_no_area">No area shown — tap Search, Capture or Click above to show it.</string>
+    <string name="overlay_no_area">No area shown — tap Search, Template or Click above to show it.</string>
     <string name="overlay_show_area_first">Showing the %1$s area — move or resize it, then tap %2$s again.</string>
     <string name="overlay_align_fallback">Capture alignment probe not visible — using the window position instead.</string>
     <string name="overlay_capture_changed">The area changed during the capture — try again.</string>

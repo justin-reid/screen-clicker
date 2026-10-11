@@ -249,8 +249,9 @@ fun RuleEditorScreen(
             )
         }
 
-        // One way in to the floating editor, so the buttons that need it cannot drift into
-        // asking for the overlay permission differently.
+        // Every door into the floating editor goes through this one launcher, so the
+        // buttons that need it cannot drift into asking for the overlay permission
+        // differently.
         val openOnScreenEditor: (RectBubbleView.Role?) -> Unit = { role ->
             if (Settings.canDrawOverlays(context)) {
                 ConfigOverlayService.start(context, editing.id, role)
@@ -260,6 +261,20 @@ fun RuleEditorScreen(
                         Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                         Uri.parse("package:${context.packageName}"),
                     ),
+                )
+            }
+        }
+
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Areas on screen", style = MaterialTheme.typography.titleSmall)
+                Button(onClick = { openOnScreenEditor(null) }) {
+                    Text("Draw areas on screen")
+                }
+                Text(
+                    text = "Opens the floating editor over your app with the search, " +
+                        "template and click areas. Pick a box, drag and resize it, then Save.",
+                    style = MaterialTheme.typography.bodySmall,
                 )
             }
         }
@@ -285,22 +300,19 @@ fun RuleEditorScreen(
                     Text(it, style = MaterialTheme.typography.bodySmall)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { openOnScreenEditor(null) }) {
-                        Text("Capture on screen")
+                    Button(onClick = { openOnScreenEditor(RectBubbleView.Role.TEMPLATE) }) {
+                        Text("Capture template")
                     }
                     OutlinedButton(onClick = { pickTemplateImage.launch("image/*") }) {
                         Text("Import image")
                     }
                 }
                 Text(
-                    text = "Capture on screen opens the floating editor, where the boxes " +
-                        "for all three areas are drawn and the template is captured from " +
-                        "the screen itself. The click area is one of those boxes: use " +
-                        "Draw click area on screen, further down, opens the same editor " +
-                        "with that one already selected. Import image uses a picture you " +
-                        "already have — keep it at the size it appears on screen, because " +
-                        "matching compares pixels 1:1. It is automatically scaled down to " +
-                        "fit inside the search region.",
+                    text = "Capture template opens the floating editor with the template " +
+                        "box shown: position it over the thing to watch, then tap Capture. " +
+                        "Import image uses a picture you already have — keep it at the size " +
+                        "it appears on screen, because matching compares pixels 1:1. It is " +
+                        "automatically scaled down to fit inside the search region.",
                     style = MaterialTheme.typography.bodySmall,
                 )
 
@@ -331,10 +343,12 @@ fun RuleEditorScreen(
                 Text(
                     text = "Currently ${editing.searchRegion.width} × " +
                         "${editing.searchRegion.height} px, top-left at " +
-                        "(${editing.searchRegion.left}, ${editing.searchRegion.top}). " +
-                        "Easiest way to set it: draw it in the on-screen editor.",
+                        "(${editing.searchRegion.left}, ${editing.searchRegion.top}).",
                     style = MaterialTheme.typography.bodySmall,
                 )
+                OutlinedButton(onClick = { openOnScreenEditor(RectBubbleView.Role.SEARCH) }) {
+                    Text("Draw search area on screen")
+                }
                 RegionFields(
                     rect = editing.searchRegion,
                     onChange = { r -> update { it.copy(searchRegion = r) } },
@@ -357,6 +371,17 @@ fun RuleEditorScreen(
                         label = { Text("Click inside defined click area", maxLines = 2) },
                     )
                 }
+                OutlinedButton(onClick = {
+                    openOnScreenEditor(RectBubbleView.Role.CLICK)
+                }) {
+                    Text("Draw click area on screen")
+                }
+                Text(
+                    text = "Opens the floating editor with the click area selected: drag " +
+                        "and resize it over the live app, then Save. The other boxes in " +
+                        "that editor are the search area and the template.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
                 if (editing.clickMode == ClickMode.ON_REGION) {
                     Text(
                         text = "Choose the area where the tap lands when the image is detected.",
@@ -369,17 +394,6 @@ fun RuleEditorScreen(
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
-                    OutlinedButton(onClick = {
-                        openOnScreenEditor(RectBubbleView.Role.CLICK)
-                    }) {
-                        Text("Draw click area on screen")
-                    }
-                    Text(
-                        text = "Opens the floating editor with the click area selected: drag " +
-                            "and resize it over the live app, then Save. The other boxes in " +
-                            "that editor are the search area and the template.",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
                     RegionFields(
                         rect = editing.clickRegion ?: PxRect(0, 0, 0, 0),
                         onChange = { r -> update { it.copy(clickRegion = r) } },
