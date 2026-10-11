@@ -118,6 +118,24 @@ app/
 - **The periodic status line accounts for the tap burst separately** (`scan … capture … gray …
   match … taps Nms`). `scan` used to mean capture + gray + match and was reported as the whole
   cost of an iteration, which hid a tap burst several times longer than the scan itself.
+- **The scan's cost is search-region area plus one full-resolution refine per near-threshold
+  peak — and on device an implementation gap far larger than either.** Measured locally at the
+  geometry the phone reports (200x180 template, 1075x1717 region, ~32 buttons on screen;
+  `vision/SearchCostBreakdownTest`, numbers printed on every run): ~100ms for the coarse pass
+  over that region with an *empty* screen, ~+2ms for every peak admitted above the coarse
+  floor, ~165ms for the whole StarFarm field, and ~6ms for the same screen searched over a
+  320x300 region. So region area is a real term the user can change — but the device reports
+  `match 5161ms` for that same work, ~30x slower per operation, which neither region nor
+  template choice explains. Two candidates, cheapest first: (1) every APK published so far is
+  a **debuggable** build, and debuggable apps run without ART's optimizing compiler, which is
+  exactly what hurts a tight integer loop — hence the second CI artifact,
+  `screen-clicker-<sha>-release`, shipped to measure that rather than assume it; (2) the worst
+  case is the frame where nothing matches confidently, because the high-pass rescue re-refines
+  the entire peak set (measured: 229ms for the decoys-only screen against 165ms for the same
+  screen with the target present). Do **not** buy speed by raising the coarse floor or capping
+  the peak set without re-checking the round-7 fade case and the round-13 multi-occurrence
+  case. And do not explain the gap with "the other app searches a smaller region" — that was
+  offered once, on no evidence, and Justin's same-purpose/same-screen usage rules it out.
 
 ## Data
 

@@ -42,11 +42,21 @@ For fast reaction (~100–300 ms), the app asks for screen-capture permission
 
 ## Getting the app
 
-Every push builds an installable APK. Open [**Actions**][actions], click the most recent
-run, download the artifact under **Artifacts** — it's named `screen-clicker-` followed by
-the short commit hash of that build. It downloads as a `.zip`; extract the
-`screen-clicker-debug.apk` inside before installing. You'll need to be signed in to
-GitHub to download artifacts.
+Every push builds two installable APKs. Open [**Actions**][actions], click the most recent
+run, download the artifact under **Artifacts** — both are named `screen-clicker-` followed
+by the short commit hash of that build. They download as a `.zip`; extract the APK inside
+before installing. You'll need to be signed in to GitHub to download artifacts.
+
+| Artifact | Install this for |
+|---|---|
+| `screen-clicker-<sha>` → `screen-clicker-debug.apk` | everything, including development |
+| `screen-clicker-<sha>-release` → `screen-clicker-release.apk` | measuring how fast matching really is |
+
+Both are signed with the same key, so either installs over the other. The release build is
+not a distribution build — it exists because a debuggable APK runs app code without ART's
+optimizing compiler, and the template matcher is a tight integer loop, the case that
+suffers most. On a search that takes the debug build several seconds, the release build is
+the fair comparison against any other app on the same screen.
 
 ## Building it yourself
 

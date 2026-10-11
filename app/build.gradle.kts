@@ -57,9 +57,22 @@ android {
             isMinifyEnabled = false
         }
         release {
-            // Deliberately off: this is a sideloaded personal app with no size budget.
+            // Deliberately off: this is a sideloaded personal app with no size budget, and
+            // with shrinking off there are no keep rules to get wrong around
+            // kotlinx.serialization or the accessibility service.
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // Signed with the same shared key as the debug build, so it installs straight
+            // over a debug copy. This variant is not a distribution build — nothing here is
+            // hardened, and it exists to be *measured* on the phone beside the debug one. A
+            // debuggable APK runs app code without ART's optimizing compiler, which is the
+            // first thing to rule out for the matcher's tight integer loops (see AGENTS.md,
+            // "the scan's cost": ~5.1s on the device against ~165ms for the same geometry
+            // on a laptop JVM). Left unsigned when the shared keystore is absent, which is
+            // the normal local case — `assembleRelease` then yields *-unsigned.apk.
+            if (rootProject.file("debug.keystore").exists()) {
+                signingConfig = signingConfigs.getByName("debug")
+            }
         }
     }
 
