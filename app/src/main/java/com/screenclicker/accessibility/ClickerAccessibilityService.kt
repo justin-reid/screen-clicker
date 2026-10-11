@@ -34,6 +34,7 @@ import com.screenclicker.model.Script
 import com.screenclicker.overlay.ConfigOverlayService
 import com.screenclicker.overlay.ControlPanelService
 import com.screenclicker.overlay.InstallerWindow
+import com.screenclicker.overlay.TapMark
 import com.screenclicker.store.ScriptStore
 import com.screenclicker.store.SettingsRepo
 import com.screenclicker.vision.GrayImage
@@ -147,15 +148,15 @@ class ClickerAccessibilityService : AccessibilityService() {
             instance?.tap(x, y) ?: TapOutcome.DECLINED
 
         /**
-         * Temporarily hides the detection highlight layer so it cannot appear inside a
-         * screenshot taken by the rule editor, or while the system's consent dialog is up.
+         * Temporarily hides the run overlay — match boxes *and* tap markers — so neither can
+         * appear inside a screenshot taken by the rule editor, or while the system's consent
+         * dialog is up.
          *
-         * Independent of the user's own choice: this only *mutes*, it never forces the
-         * rectangles back on for someone who turned them off. Must be called from the main
-         * thread.
+         * Independent of the user's own choices: this only *mutes*, it never forces anything
+         * back on for someone who turned it off. Must be called from the main thread.
          */
-        fun setDetectionLayerVisible(visible: Boolean) {
-            instance?.setDetectionsMuted(!visible)
+        fun setOverlayVisible(visible: Boolean) {
+            instance?.setOverlayMuted(!visible)
         }
 
         /**
@@ -167,6 +168,15 @@ class ClickerAccessibilityService : AccessibilityService() {
          */
         fun setDetectionsEnabled(enabled: Boolean) {
             instance?.setDetectionsWanted(enabled)
+        }
+
+        /**
+         * Turns the tap markers on or off *now*, without restarting the run — the same shape
+         * as [setDetectionsEnabled], and for the same reason: the layer's window lives for the
+         * whole run, so the setting is only ever a visibility flip.
+         */
+        fun setTapsEnabled(enabled: Boolean) {
+            instance?.setTapsWanted(enabled)
         }
 
         /** Opens the system Recents — how the rule editor lets the user switch apps. */
@@ -198,9 +208,9 @@ class ClickerAccessibilityService : AccessibilityService() {
     private var runnerJob: Job? = null
 
     /**
-     * Detection highlights overlay. Its window is opened for the whole run whatever the
-     * setting says; the setting only drives its visibility, which is what lets the
-     * rectangles be turned off (or back on) without a restart.
+     * The run overlay: match boxes and tap markers. Its window is opened for the whole run
+     * whatever the settings say; the settings only drive what is drawn and the layer's
+     * visibility, which is what lets either be switched without a restart.
      *
      * Generations guard a restart race: the old run's finally must not tear down the
      * new run's window when a script is restarted while already running.
@@ -209,39 +219,57 @@ class ClickerAccessibilityService : AccessibilityService() {
      * @Volatile, which is what makes the update visible to the scan loop at all.
      */
     @Volatile
-    private var detectionView: com.screenclicker.overlay.DetectionHighlightView? = null
-    private var detectionGeneration = 0
+    private var overlayView: com.screenclicker.overlay.RunOverlayView? = null
+    private var overlayGeneration = 0
 
     /** The user's choice about drawing match rectangles; read live, not only at Start. */
     @Volatile
     private var detectionsWanted = false
 
     /**
+     * The user's separate choice about drawing tap markers. Deliberately not folded into
+     * [detectionsWanted]: tapping a fixed area without its template being visible is the
+     * normal case, and the tap scatter is exactly what has to be checked there.
+     */
+    @Volatile
+    private var tapsWanted = false
+
+    /**
      * Set by our own windows while they need the layer out of the way (a template capture,
-     * the installer, the capture-consent dialog). Kept apart from [detectionsWanted] so that
-     * un-muting can never switch rectangles back on for someone who turned them off.
+     * the installer, the capture-consent dialog). Kept apart from [detectionsWanted] and
+     * [tapsWanted] so that un-muting can never switch anything back on for someone who turned
+     * it off.
      */
     @Volatile
     private var detectionsMuted = false
 
-    private fun setDetectionsMuted(muted: Boolean) {
+    private fun setOverlayMuted(muted: Boolean) {
         detectionsMuted = muted
-        applyDetectionVisibility()
+        applyOverlayVisibility()
     }
 
     private fun setDetectionsWanted(wanted: Boolean) {
         detectionsWanted = wanted
-        applyDetectionVisibility()
+        applyOverlayVisibility()
+    }
+
+    private fun setTapsWanted(wanted: Boolean) {
+        tapsWanted = wanted
+        applyOverlayVisibility()
     }
 
     /**
-     * One place decides whether match rectangles are on screen. Hiding is a visibility flip
-     * rather than a window add/remove, which is what makes it safe to do mid-run.
+     * One place decides whether the overlay is on screen. Hiding is a visibility flip rather
+     * than a window add/remove, which is what makes it safe to do mid-run — and with two
+     * independent switches, the layer stays up while *either* of them has something to draw:
+     * turning the match boxes off must not take the tap markers down with them.
      */
-    private fun applyDetectionVisibility() {
-        val view = detectionView ?: return
+    private fun applyOverlayVisibility() {
+        val view = overlayView ?: return
+        view.showTaps = tapsWanted
         view.visibility =
-            if (detectionsWanted && !detectionsMuted) View.VISIBLE else View.INVISIBLE
+            if ((detectionsWanted || tapsWanted) && !detectionsMuted) View.VISIBLE
+            else View.INVISIBLE
     }
 
     /**
@@ -267,7 +295,7 @@ class ClickerAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         if (instance === this) instance = null
         endRun(releaseCapture = true)
-        hideDetectionOverlay(0, force = true)
+        hideRunOverlay(0, force = true)
         serviceScope.cancel()
         super.onDestroy()
     }
@@ -315,7 +343,7 @@ class ClickerAccessibilityService : AccessibilityService() {
         )
         ControlPanelService.setStandDown(up)
         ConfigOverlayService.setStandDown(up)
-        setDetectionLayerVisible(!up)
+        setOverlayVisible(!up)
     }
 
     /**
@@ -400,7 +428,7 @@ class ClickerAccessibilityService : AccessibilityService() {
     private fun standDownForConsent(up: Boolean) {
         ControlPanelService.setConsentUp(up)
         ConfigOverlayService.setConsentUp(up)
-        setDetectionLayerVisible(!up)
+        setOverlayVisible(!up)
     }
 
     private fun beginRun(scriptId: String) {
@@ -414,8 +442,10 @@ class ClickerAccessibilityService : AccessibilityService() {
         // The window is opened for the whole run whatever the setting says, and the setting
         // only drives its visibility: that is what lets rectangles be turned off (or back
         // on) mid-run instead of at the next Start.
-        detectionsWanted = SettingsRepo(context).load().showDetections
-        val detectionGen = showDetectionOverlay()
+        val startSettings = SettingsRepo(context).load()
+        detectionsWanted = startSettings.showDetections
+        tapsWanted = startSettings.showTaps
+        val overlayGen = showRunOverlay()
         // The scan loop (screenshot copy, grayscale, matching) is CPU-bound and must not
         // run on the main thread: it used to, which froze the UI and our own overlays for
         // most of every scan interval. Only the overlay calls below hop back to main.
@@ -464,7 +494,22 @@ class ClickerAccessibilityService : AccessibilityService() {
                     onDetections = { matches ->
                         // Generation-guarded: a run that was cancelled but is still finishing
                         // a scan must not paint its rectangles into a newer run's window.
-                        if (detectionGen == detectionGeneration) detectionView?.update(matches)
+                        if (overlayGen == overlayGeneration) overlayView?.update(matches)
+                    },
+                    onTapMark = { bounds, x, y, acted ->
+                        // Stamped on the runner's own clock so a marker's fade measures the
+                        // same time the cadence decisions do.
+                        if (overlayGen == overlayGeneration) {
+                            overlayView?.addTap(
+                                TapMark(
+                                    x = x,
+                                    y = y,
+                                    bounds = bounds,
+                                    acted = acted,
+                                    at = SystemClock.elapsedRealtime(),
+                                ),
+                            )
+                        }
                     },
                     onEvent = { message ->
                         Log.i(TAG, "runner: $message")
@@ -489,16 +534,16 @@ class ClickerAccessibilityService : AccessibilityService() {
                 // screen until the app was force-stopped. NonCancellable runs the block
                 // regardless; [endRun] takes the layer down on the spot as well, so this is
                 // the belt to that pair of braces.
-                withContext(Dispatchers.Main + NonCancellable) { hideDetectionOverlay(detectionGen) }
+                withContext(Dispatchers.Main + NonCancellable) { hideRunOverlay(overlayGen) }
             }
         }
     }
 
-    /** Adds the highlight window (or reuses it) and returns this run's generation. */
-    private fun showDetectionOverlay(): Int {
-        detectionGeneration += 1
-        if (detectionView != null) return detectionGeneration
-        val view = com.screenclicker.overlay.DetectionHighlightView(this)
+    /** Adds the run-overlay window (or reuses it) and returns this run's generation. */
+    private fun showRunOverlay(): Int {
+        overlayGeneration += 1
+        if (overlayView != null) return overlayGeneration
+        val view = com.screenclicker.overlay.RunOverlayView(this)
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
@@ -511,22 +556,22 @@ class ClickerAccessibilityService : AccessibilityService() {
         )
         try {
             getSystemService(WindowManager::class.java)!!.addView(view, params)
-            detectionView = view
-            // A run started while the installer is up, or with the setting off, gets the
+            overlayView = view
+            // A run started while the installer is up, or with both settings off, gets the
             // layer hidden from the start rather than only once something changes.
-            applyDetectionVisibility()
+            applyOverlayVisibility()
         } catch (e: Exception) {
-            Log.w(TAG, "detection overlay unavailable", e)
+            Log.w(TAG, "run overlay unavailable", e)
         }
-        return detectionGeneration
+        return overlayGeneration
     }
 
-    private fun hideDetectionOverlay(generation: Int, force: Boolean = false) {
-        if (!force && generation != detectionGeneration) return
-        detectionView?.let { view ->
+    private fun hideRunOverlay(generation: Int, force: Boolean = false) {
+        if (!force && generation != overlayGeneration) return
+        overlayView?.let { view ->
             runCatching { getSystemService(WindowManager::class.java)!!.removeView(view) }
         }
-        detectionView = null
+        overlayView = null
     }
 
     /**
@@ -539,15 +584,15 @@ class ClickerAccessibilityService : AccessibilityService() {
      * stopped script used to keep sharing the screen (and keep showing match rectangles)
      * until the user force-stopped the app to get rid of it.
      *
-     * The detection layer is removed here rather than only from the runner's own finally:
-     * that finally belongs to the coroutine Stop just cancelled.
+     * The run overlay is removed here rather than only from the runner's own finally: that
+     * finally belongs to the coroutine Stop just cancelled.
      */
     private fun endRun(releaseCapture: Boolean = false) {
         runnerJob?.cancel()
         runnerJob = null
         _runningScriptId.value = null
         cancelRunNotification()
-        hideDetectionOverlay(0, force = true)
+        hideRunOverlay(0, force = true)
         if (releaseCapture) {
             CaptureProjectionService.stop(this)
             Log.i(TAG, "stop: script, overlays and capture session released")

@@ -16,6 +16,16 @@ data class GlobalSettings(
     /** Highlight matched regions live while a script runs (M6). */
     val showDetections: Boolean = true,
     /**
+     * Draw a marker where each tap lands, with the area it was drawn from (M10).
+     *
+     * Off by default: it is a diagnostic, not a permanent overlay. Its purpose is to make the
+     * random tap point *visible* — a single coordinate in the panel's status line cannot show
+     * whether taps are scattered through the click area or all land at its centre. Deliberately
+     * independent of [showDetections]: seeing the tap scatter without the match boxes is the
+     * normal way to use it, since the boxes are what make a run unreadable.
+     */
+    val showTaps: Boolean = false,
+    /**
      * Minimum time between screen scans while running.
      *
      * A floor, not a target: the loop waits only for the remainder of this after the work it

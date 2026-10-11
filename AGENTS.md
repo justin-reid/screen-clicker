@@ -46,7 +46,7 @@ app/
   vision/         TemplateMatcher — pure Kotlin on IntArray pixels, no android.* imports
   engine/         ScriptRunner — scan loop, rule evaluation, delay+jitter, cadence
   model/          Script/Rule/Settings — kotlinx.serialization JSON + PNG templates
-  overlay/        ConfigOverlayService (editor), DetectionOverlay (highlights)
+  overlay/        ConfigOverlayService (editor), RunOverlayView (match boxes + tap markers)
   settings/       Compose UI — scripts, rule editor, calibration, global settings
   tile/           Quick Settings tile
 ```
@@ -96,14 +96,25 @@ app/
   about. The calibration feature writes `delayMs` (average human reaction), jitter stays
   separate and small. Per-tap spacing is deliberately not a thing — if it is ever wanted it
   belongs beside `intervalMs`, not on the reaction.
-- **The detection highlight layer is a visibility flip, not a window.** Its window is opened
-  for the whole run whatever the setting says, and `showDetections` only drives its
-  `visibility`. That is what makes toggling it mid-run work — the floating panel and the
-  settings screen both do. Adding or removing the window mid-run would leave the runner's
-  captured `detectionGen` stale and paint nothing. `detectionsWanted` (the user's choice) and
-  `detectionsMuted` (our own windows standing the layer down for a template capture, the
-  installer, or the consent dialog) are separate on purpose: un-muting must never switch
-  rectangles back on for someone who turned them off.
+- **The run overlay has two independent switches, and each is a visibility flip, not a
+  window.** Its window is opened for the whole run whatever the settings say; `showDetections`
+  (match boxes) and `showTaps` (tap markers) only drive what is drawn and the layer's
+  `visibility`. That is what makes either of them toggleable mid-run — the floating panel and
+  the settings screen both do. Adding or removing the window mid-run would leave the runner's
+  captured `overlayGen` stale and paint nothing. `detectionsWanted`/`tapsWanted` (the user's
+  choices) and `detectionsMuted` (our own windows standing the layer down for a template
+  capture, the installer, or the consent dialog) are separate on purpose: un-muting must never
+  switch anything back on for someone who turned it off. The layer stays visible while *either*
+  switch has something to draw, so turning the boxes off does not take the markers with them.
+- **The tap markers exist to make the random tap point checkable.** One coordinate in the
+  status line cannot show a distribution, so every injected tap leaves a marker for a couple of
+  seconds with the area it was drawn from outlined beneath it: a scatter is the randomness
+  working, a marker that never moves is the bug. `overlay/TapTrace` holds the bounded,
+  self-expiring record (pure Kotlin, unit-tested; the view only paints it). Refused gestures
+  are marked too, drawn hollow and grey — a run that injects nothing must not look like a run
+  that is clicking, which is exactly how the missing `canPerformGestures` hid for four rounds.
+  The feature is off by default and independent of the match boxes; watching the taps with the
+  boxes off is the normal way to use it.
 - **The periodic status line accounts for the tap burst separately** (`scan … capture … gray …
   match … taps Nms`). `scan` used to mean capture + gray + match and was reported as the whole
   cost of an iteration, which hid a tap burst several times longer than the scan itself.
@@ -155,6 +166,7 @@ app/
 | M7 | Reaction-time calibration | code done; on-device check pending |
 | M8 | MediaProjection fast capture backend | code done; on-device check pending |
 | M9 | Script→app binding (in runner), polish, docs | done |
+| M10 | "Show taps" markers (random tap point visible) | code done; on-device check pending |
 
 All milestones are built and unit-tested. The remaining verification is physical:
 sideload, grant permissions, and run a script on a real screen — the build machine

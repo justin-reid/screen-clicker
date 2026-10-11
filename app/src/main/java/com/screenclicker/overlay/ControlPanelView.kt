@@ -35,6 +35,7 @@ class ControlPanelView(
         fun onExpandScript(scriptId: String)
         fun onEditRule(scriptId: String, ruleId: String)
         fun onToggleDetections()
+        fun onToggleTaps()
         fun onOpenApp()
         fun onHide()
         fun onEnableAccess()
@@ -54,6 +55,8 @@ class ControlPanelView(
         val accessibilityOn: Boolean = true,
         /** Whether the match rectangles are being drawn; drives the panel's own switch. */
         val detectionsShown: Boolean = true,
+        /** Whether the tap markers are being drawn; the second overlay switch. */
+        val tapsShown: Boolean = false,
     )
 
     private val density = resources.displayMetrics.density
@@ -219,6 +222,7 @@ class ControlPanelView(
             state.rules,
             state.accessibilityOn,
             state.detectionsShown,
+            state.tapsShown,
         )
         if (structural == structuralKey) return false
         structuralKey = structural
@@ -253,34 +257,25 @@ class ControlPanelView(
             content.addView(enable, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         }
 
-        // The match rectangles are the one thing worth switching off mid-run: they earn
-        // their keep while a rule is being set up and are clutter once it works. Same
-        // setting as the app's screen, applied the moment it is tapped.
-        val detectionRow = LinearLayout(context).apply { orientation = HORIZONTAL }
-        detectionRow.addView(
-            TextView(context).apply {
-                text = context.getString(com.screenclicker.R.string.panel_detections)
-                setTextColor(0xFFCFD8DC.toInt())
-                textSize = 12f
-                gravity = Gravity.CENTER_VERTICAL
-            },
-            LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f),
-        )
-        val detectionToggle = textButton(
-            context.getString(
-                if (state.detectionsShown) {
-                    com.screenclicker.R.string.panel_toggle_on
-                } else {
-                    com.screenclicker.R.string.panel_toggle_off
-                },
-            ),
-        ) { callbacks.onToggleDetections() }
-        detectionToggle.setTextColor(
-            if (state.detectionsShown) 0xFFA5D6A7.toInt() else 0xFFFFAB91.toInt(),
-        )
-        detectionRow.addView(detectionToggle)
+        // The two overlay switches, both live mid-run. The match rectangles earn their keep
+        // while a rule is being set up and are clutter once it works; the tap markers are how
+        // "is the click really placed at random inside the area?" gets checked — and the two
+        // are wanted in opposite combinations, which is why they are separate rows. Same
+        // settings as the app's screen, applied the moment they are tapped.
         content.addView(
-            detectionRow,
+            overlaySwitch(
+                context.getString(com.screenclicker.R.string.panel_detections),
+                state.detectionsShown,
+                callbacks::onToggleDetections,
+            ),
+            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT),
+        )
+        content.addView(
+            overlaySwitch(
+                context.getString(com.screenclicker.R.string.panel_taps),
+                state.tapsShown,
+                callbacks::onToggleTaps,
+            ),
             LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT),
         )
 
@@ -342,6 +337,33 @@ class ControlPanelView(
         row.addView(textButton(context.getString(com.screenclicker.R.string.panel_edit)) {
             callbacks.onEditRule(scriptId, rule.id)
         })
+        return row
+    }
+
+    /** A label with an On/Off button: the panel's shape for a boolean setting. */
+    private fun overlaySwitch(label: String, on: Boolean, onToggle: () -> Unit): View {
+        val row = LinearLayout(context).apply { orientation = HORIZONTAL }
+        row.addView(
+            TextView(context).apply {
+                text = label
+                setTextColor(0xFFCFD8DC.toInt())
+                textSize = 12f
+                gravity = Gravity.CENTER_VERTICAL
+            },
+            LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f),
+        )
+        val toggle = textButton(
+            context.getString(
+                if (on) {
+                    com.screenclicker.R.string.panel_toggle_on
+                } else {
+                    com.screenclicker.R.string.panel_toggle_off
+                },
+            ),
+            onToggle,
+        )
+        toggle.setTextColor(if (on) 0xFFA5D6A7.toInt() else 0xFFFFAB91.toInt())
+        row.addView(toggle)
         return row
     }
 

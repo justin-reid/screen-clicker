@@ -23,8 +23,16 @@ import kotlin.random.Random
 class ScriptRunnerIntegrationTest {
 
     private data class Point(val x: Int, val y: Int)
+
+    /**
+     * One tap as the overlay is told about it: where it was aimed, which area it was drawn
+     * from, and how the system took it — the shape of the runner's `onTapMark` port.
+     */
+    private data class Mark(val bounds: PxRect, val x: Int, val y: Int, val acted: Boolean)
+
     private data class RunResult(
         val taps: List<Point>,
+        val marks: List<Mark>,
         val detections: List<List<Pair<Int, Int>>>,
         val events: List<String>,
         val captures: Int,
@@ -97,6 +105,7 @@ class ScriptRunnerIntegrationTest {
     ): RunResult {
         val capturer = SequenceCapturer(frames, onCapture)
         val taps = mutableListOf<Point>()
+        val marks = mutableListOf<Mark>()
         val detections = mutableListOf<List<Pair<Int, Int>>>()
         val events = mutableListOf<String>()
         val runner = ScriptRunner(
@@ -117,6 +126,7 @@ class ScriptRunnerIntegrationTest {
                         taps += point
                         tapResult(point)
                     },
+                    onTapMark = { bounds, x, y, acted -> marks += Mark(bounds, x, y, acted) },
                     onDetections = { found -> detections += found.map { it.left to it.top } },
                     onEvent = events::add,
                 )
@@ -124,7 +134,7 @@ class ScriptRunnerIntegrationTest {
         } catch (_: CancellationException) {
             // The finite fake frame source cancels the otherwise continuous service loop.
         }
-        return RunResult(taps, detections, events, capturer.captures)
+        return RunResult(taps, marks, detections, events, capturer.captures)
     }
 
     private fun rule(
@@ -163,6 +173,64 @@ class ScriptRunnerIntegrationTest {
         cadence = cadence,
         intervalMs = intervalMs,
     )
+
+    @Test
+    fun `taps are marked at random points inside the click area, not at its centre`() {
+        val f = fixture()
+        val populated = f.capture(f.frame(Point(24, 30)))
+        val clickArea = PxRect(150, 120, 220, 175)
+        val rule = rule(
+            f,
+            clickMode = ClickMode.ON_REGION,
+            clickRegion = clickArea,
+            cadence = Cadence.REPEAT_WHILE_VISIBLE,
+            intervalMs = 0,
+        )
+
+        // Twenty scans of an unchanged frame: the area is pressed on every one, because the
+        // repeat interval is zero and the frozen clock never gets past it. This is the case
+        // the "show taps" layer exists for — a rule holding one switch down while the user
+        // watches where the tap lands.
+        val result = execute(rule, f.template, List(20) { populated })
+
+        assertEquals(20, result.marks.size)
+        // Each mark names the configured area (in display coordinates, where the gesture goes)
+        // and a point inside it — inset by the documented 10%, so an edge is never tapped.
+        val inset = clickArea.insetFraction(PxRect.TAP_INSET_FRACTION)
+        assertTrue(result.marks.all { it.bounds == clickArea })
+        assertTrue(result.marks.all { it.x in inset.left until inset.right })
+        assertTrue(result.marks.all { it.y in inset.top until inset.bottom })
+        // The point is randomised rather than the centre of the area. This is the claim the
+        // marker layer is there to make visible, so it is asserted rather than assumed.
+        assertTrue(
+            "every tap landed on the centre: ${result.marks.map { it.x to it.y }}",
+            result.marks.any { it.x != clickArea.centerX || it.y != clickArea.centerY },
+        )
+        assertTrue(result.marks.map { it.x }.distinct().size > 1)
+        assertTrue(result.marks.all { it.acted })
+    }
+
+    @Test
+    fun `a refused tap is still marked, flagged as not having acted`() {
+        val f = fixture()
+        val populated = f.capture(f.frame(Point(24, 30)))
+        val rule = rule(f, cadence = Cadence.REPEAT_WHILE_VISIBLE, intervalMs = 0)
+
+        val result = execute(
+            rule,
+            f.template,
+            List(3) { populated },
+            tapResult = { TapOutcome.DECLINED },
+        )
+
+        // Marked anyway: a run whose every gesture is refused has to be distinguishable on
+        // screen from a run that is clicking, which is exactly what went unnoticed until the
+        // missing canPerformGestures was found from the log.
+        assertEquals(3, result.marks.size)
+        assertTrue(result.marks.none { it.acted })
+        // With no defined click area the mark reports the find itself as the area drawn.
+        assertTrue(result.marks.all { it.bounds.width == f.template.width })
+    }
 
     @Test
     fun `two 99 percent copies in a grid are both found and clicked in a fixed area`() {

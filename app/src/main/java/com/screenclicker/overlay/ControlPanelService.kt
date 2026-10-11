@@ -280,9 +280,10 @@ class ControlPanelService : Service() {
                 rules = rules,
                 lastEvent = ClickerAccessibilityService.lastRunnerEvent.value,
                 accessibilityOn = accessibilityOn,
-                // Read live rather than cached, so the app's own switch and this one can
-                // never disagree about whether rectangles are being drawn.
+                // Read live rather than cached, so the app's own switches and these can
+                // never disagree about what is being drawn.
                 detectionsShown = settingsRepo.load().showDetections,
+                tapsShown = settingsRepo.load().showTaps,
             ),
         )
         // Runner events arrive several times a second; only re-measure when something
@@ -382,6 +383,16 @@ class ControlPanelService : Service() {
             repo.save(repo.load().copy(showDetections = next))
             // Applied to the running script immediately; the layer is a visibility flip.
             ClickerAccessibilityService.setDetectionsEnabled(next)
+            render()
+        }
+
+        override fun onToggleTaps() {
+            val repo = settingsRepo
+            val next = !repo.load().showTaps
+            repo.save(repo.load().copy(showTaps = next))
+            // Same visibility flip as the rectangles, and independent of them: turning the
+            // tap markers on while the match boxes are off is the point of the feature.
+            ClickerAccessibilityService.setTapsEnabled(next)
             render()
         }
 

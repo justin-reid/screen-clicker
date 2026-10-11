@@ -19,6 +19,7 @@ class SettingsRepo(context: Context) {
         defaultThreshold = prefs.getFloat(KEY_THRESHOLD, 0.90f),
         defaultIntervalMs = prefs.getLong(KEY_INTERVAL, 1_000L),
         showDetections = prefs.getBoolean(KEY_SHOW_DETECTIONS, true),
+        showTaps = prefs.getBoolean(KEY_SHOW_TAPS, false),
         scanIntervalMs = prefs.getLong(KEY_SCAN_INTERVAL, 150L),
         captureBackend = prefs.getString(KEY_BACKEND, "auto").orEmpty().ifBlank { "auto" },
         controlPanelEnabled = prefs.getBoolean(KEY_CONTROL_PANEL, false),
@@ -31,6 +32,7 @@ class SettingsRepo(context: Context) {
             .putFloat(KEY_THRESHOLD, settings.defaultThreshold)
             .putLong(KEY_INTERVAL, settings.defaultIntervalMs)
             .putBoolean(KEY_SHOW_DETECTIONS, settings.showDetections)
+            .putBoolean(KEY_SHOW_TAPS, settings.showTaps)
             .putLong(KEY_SCAN_INTERVAL, settings.scanIntervalMs)
             .putString(KEY_BACKEND, settings.captureBackend)
             .putBoolean(KEY_CONTROL_PANEL, settings.controlPanelEnabled)
@@ -51,6 +53,7 @@ class SettingsRepo(context: Context) {
         const val KEY_THRESHOLD = "defaultThreshold"
         const val KEY_INTERVAL = "defaultIntervalMs"
         const val KEY_SHOW_DETECTIONS = "showDetections"
+        const val KEY_SHOW_TAPS = "showTaps"
         const val KEY_SCAN_INTERVAL = "scanIntervalMs"
         const val KEY_BACKEND = "captureBackend"
         const val KEY_CONTROL_PANEL = "controlPanelEnabled"

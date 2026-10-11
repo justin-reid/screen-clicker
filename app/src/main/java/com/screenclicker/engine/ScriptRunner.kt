@@ -77,6 +77,16 @@ class ScriptRunner(
         templates: Map<String, GrayImage>,
         foregroundPackage: () -> String?,
         onTap: suspend (x: Int, y: Int) -> TapOutcome,
+        /**
+         * Reports each tap that was actually attempted: the bounds it was drawn inside, the
+         * randomised point, and whether the system acted on it. This is what the "show taps"
+         * marker layer draws, and it is reported *with* the bounds because the point alone
+         * cannot answer the question the layer exists for — whether the point is scattered
+         * through the area or always its centre. Refused gestures are reported too, flagged as
+         * such, so a run that injects nothing does not look like a run that is clicking.
+         */
+        onTapMark: (bounds: PxRect, x: Int, y: Int, acted: Boolean) -> Unit =
+            { _, _, _, _ -> },
         onDetections: (List<MatchResult>) -> Unit = {},
         onEvent: (String) -> Unit = {},
     ) {
@@ -330,6 +340,10 @@ class ScriptRunner(
                 onEvent("${hit.rule.name}: injecting tap at ($x,$y) — attempt $tapAttempts")
                 val reply = onTap(x, y)
                 val landed = reply.acted
+                // Before the cadence bookkeeping below, so a thrown overlay call cannot stop
+                // the rule's state from being updated. The marker is drawn whatever the
+                // outcome; `landed` decides how it is drawn, not whether.
+                onTapMark(bounds, x, y, landed)
                 val state = states[hit.rule.id]
                 if (landed && hit.rule.cadence == Cadence.REPEAT_WHILE_VISIBLE) {
                     state?.lastClickAtByLocation?.set(hit.match.left to hit.match.top, elapsedRealtime())

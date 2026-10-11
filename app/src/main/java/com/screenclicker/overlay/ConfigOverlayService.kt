@@ -637,7 +637,7 @@ class ConfigOverlayService : Service() {
      * Takes one screenshot with the probe visible and locates the marker in it. Returns the
      * capture, or null when capture is unavailable.
      *
-     * The toolbar, the floating panel and the detection layer are hidden so their pixels
+     * The toolbar, the floating panel and the run overlay are hidden so their pixels
      * cannot land in the crop, and the rectangle itself switches to probe-only painting —
      * the marker lives in the handle margin, outside the cropped area.
      */
@@ -649,7 +649,7 @@ class ConfigOverlayService : Service() {
         withContext(Dispatchers.Main) {
             toolbar?.visibility = View.INVISIBLE
             ControlPanelService.setMuted(true)
-            ClickerAccessibilityService.setDetectionLayerVisible(false)
+            ClickerAccessibilityService.setOverlayVisible(false)
             target?.view?.probeOnly = true
         }
         try {
@@ -672,7 +672,7 @@ class ConfigOverlayService : Service() {
                 // capture, and applyWindowState knows about both.
                 applyWindowState()
                 ControlPanelService.setMuted(false)
-                ClickerAccessibilityService.setDetectionLayerVisible(true)
+                ClickerAccessibilityService.setOverlayVisible(true)
             }
         }
     }
@@ -713,7 +713,7 @@ class ConfigOverlayService : Service() {
         withContext(Dispatchers.Main) {
             toolbar?.visibility = View.INVISIBLE
             ControlPanelService.setMuted(true)
-            ClickerAccessibilityService.setDetectionLayerVisible(false)
+            ClickerAccessibilityService.setOverlayVisible(false)
             target?.view?.probeOnly = true
         }
         return try {
@@ -726,7 +726,7 @@ class ConfigOverlayService : Service() {
                 target?.view?.probeOnly = false
                 applyWindowState()
                 ControlPanelService.setMuted(false)
-                ClickerAccessibilityService.setDetectionLayerVisible(true)
+                ClickerAccessibilityService.setOverlayVisible(true)
             }
         }
     }

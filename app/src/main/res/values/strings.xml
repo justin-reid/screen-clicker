@@ -54,6 +54,10 @@
     <!-- Floating-panel switch for the match rectangles. Same setting as the app's
          "Highlight matches while running"; it applies immediately, mid-run. -->
     <string name="panel_detections">Highlight matches</string>
+    <!-- Floating-panel switch for the tap markers ("show taps"): a marker where each tap
+         landed, over the area it was drawn from. Independent of the match-box switch — the
+         usual way to watch the taps is with the boxes off. -->
+    <string name="panel_taps">Show taps</string>
     <string name="panel_toggle_on">On</string>
     <string name="panel_toggle_off">Off</string>
 </resources>

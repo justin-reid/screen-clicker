@@ -129,6 +129,32 @@ fun AppSettingsScreen(
                         "without opening the app.",
                     style = MaterialTheme.typography.bodySmall,
                 )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                ) {
+                    Text("Show taps while running")
+                    Switch(
+                        checked = settings.showTaps,
+                        onCheckedChange = { on ->
+                            save(settings.copy(showTaps = on))
+                            // The same visibility flip as the match boxes: this takes effect
+                            // on the run that is going right now, not the next Start.
+                            ClickerAccessibilityService.setTapsEnabled(on)
+                        },
+                    )
+                }
+                Text(
+                    text = "Leaves a marker where each tap landed, over an outline of the " +
+                        "area it was drawn from. A tap goes to a random point inside the click " +
+                        "area, inset from its edges — a scatter of markers is that working, " +
+                        "one marker in the middle of the area is it not. Markers fade after a " +
+                        "couple of seconds, and a gesture the system refused is drawn hollow " +
+                        "and grey. Off by default, and independent of the match boxes — which " +
+                        "are usually the thing to switch off while watching the taps.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
         }
 
