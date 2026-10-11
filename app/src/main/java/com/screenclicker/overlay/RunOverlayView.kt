@@ -46,6 +46,47 @@ class RunOverlayView(context: Context) : View(context) {
     @Volatile
     var layers: RunOverlayLayers = RunOverlayLayers.NONE
 
+    /**
+     * This view's own size, once laid out. Reported in the run log beside the frame size.
+     */
+    @Volatile
+    var measuredSize: Pair<Int, Int> = 0 to 0
+        private set
+
+    /**
+     * Where this view's top-left actually is in *display* coordinates.
+     *
+     * Our window is asked for at (0,0) with MATCH_PARENT and covers the display, so this ought
+     * to be (0,0) and the canvas origin ought to be the display's. It is not: the window
+     * manager lays an overlay window's content out below the status bar anyway — the same
+     * offset [ProbeMarker] exists to measure for the editor ("an overlay's `y` can be measured
+     * from below the status bar"). The editor lives with that by measuring it and applying it
+     * to everything it hands to the engine; this view, which paints *display* coordinates —
+     * the ones taps are dispatched in and found images are reported in — never applied it.
+     * The result is every rectangle and marker one inset lower than the thing it describes.
+     *
+     * Reading our own view's position is not the "guessing at the offset" the editor's doc
+     * warns about: that was about moving the window around to compensate and having the window
+     * manager apply its own offset on top. Reading where the window ended up and moving the
+     * *drawing* cannot feed back into the layout.
+     */
+    @Volatile
+    var drawOrigin: Pair<Int, Int> = 0 to 0
+        private set
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        measuredSize = w to h
+    }
+
+    /** "<w>x<h> at (<x>,<y>)", or empty until the first layout. */
+    fun geometry(): String {
+        val (w, h) = measuredSize
+        if (w == 0 || h == 0) return ""
+        val (x, y) = drawOrigin
+        return "${w}x$h at ($x,$y)"
+    }
+
     private val trace = TapTrace()
 
     private val density = resources.displayMetrics.density
@@ -94,6 +135,14 @@ class RunOverlayView(context: Context) : View(context) {
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        // Everything below is drawn in display coordinates, so the canvas has to be moved onto
+        // the display's origin first; see [drawOrigin] for why that is not (0,0).
+        val origin = IntArray(2)
+        getLocationOnScreen(origin)
+        drawOrigin = origin[0] to origin[1]
+        if (origin[0] != 0 || origin[1] != 0) {
+            canvas.translate(-origin[0].toFloat(), -origin[1].toFloat())
+        }
         val layers = layers
         if (layers.matches) {
             for (match in matches) {

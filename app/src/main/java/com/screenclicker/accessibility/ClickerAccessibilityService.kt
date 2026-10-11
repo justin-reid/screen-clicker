@@ -496,6 +496,16 @@ class ClickerAccessibilityService : AccessibilityService() {
                     script = script,
                     templates = templates,
                     foregroundPackage = { foregroundPackage },
+                    // Read lazily, at the first scan: the overlay has been laid out by then, and
+                    // a window the size of the display at the origin is what says drawn
+                    // coordinates are display coordinates.
+                    overlayGeometry = {
+                        if (overlayGen == overlayGeneration) {
+                            overlayView?.geometry() ?: ""
+                        } else {
+                            ""
+                        }
+                    },
                     onTap = { x, y -> tap(x.toFloat(), y.toFloat()) },
                     onDetections = { matches ->
                         // Generation-guarded: a run that was cancelled but is still finishing

@@ -38,6 +38,7 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import com.screenclicker.overlay.RectBubbleView
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
@@ -248,6 +249,21 @@ fun RuleEditorScreen(
             )
         }
 
+        // One way in to the floating editor, so the buttons that need it cannot drift into
+        // asking for the overlay permission differently.
+        val openOnScreenEditor: (RectBubbleView.Role?) -> Unit = { role ->
+            if (Settings.canDrawOverlays(context)) {
+                ConfigOverlayService.start(context, editing.id, role)
+            } else {
+                context.startActivity(
+                    Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:${context.packageName}"),
+                    ),
+                )
+            }
+        }
+
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Match", style = MaterialTheme.typography.titleSmall)
@@ -269,18 +285,7 @@ fun RuleEditorScreen(
                     Text(it, style = MaterialTheme.typography.bodySmall)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = {
-                        if (Settings.canDrawOverlays(context)) {
-                            ConfigOverlayService.start(context, editing.id)
-                        } else {
-                            context.startActivity(
-                                Intent(
-                                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                    Uri.parse("package:${context.packageName}"),
-                                ),
-                            )
-                        }
-                    }) {
+                    Button(onClick = { openOnScreenEditor(null) }) {
                         Text("Capture on screen")
                     }
                     OutlinedButton(onClick = { pickTemplateImage.launch("image/*") }) {
@@ -288,12 +293,14 @@ fun RuleEditorScreen(
                     }
                 }
                 Text(
-                    text = "Capture on screen opens the floating editor: drag the boxes " +
-                        "over the live app, then Capture the template from the screen " +
-                        "itself. Import image uses a picture you already have — keep it " +
-                        "at the size it appears on screen, because matching compares " +
-                        "pixels 1:1. It is automatically scaled down to fit inside the " +
-                        "search region.",
+                    text = "Capture on screen opens the floating editor, where the boxes " +
+                        "for all three areas are drawn and the template is captured from " +
+                        "the screen itself. The click area is one of those boxes: use " +
+                        "Draw click area on screen, further down, opens the same editor " +
+                        "with that one already selected. Import image uses a picture you " +
+                        "already have — keep it at the size it appears on screen, because " +
+                        "matching compares pixels 1:1. It is automatically scaled down to " +
+                        "fit inside the search region.",
                     style = MaterialTheme.typography.bodySmall,
                 )
 
@@ -357,10 +364,22 @@ fun RuleEditorScreen(
                     )
                     if (editing.clickRegion == null) {
                         Text(
-                            text = "No click area has been saved yet. Define one in the on-screen editor or enter its bounds below.",
+                            text = "No click area has been saved yet. Draw one on screen, or " +
+                                "enter its bounds below.",
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
+                    OutlinedButton(onClick = {
+                        openOnScreenEditor(RectBubbleView.Role.CLICK)
+                    }) {
+                        Text("Draw click area on screen")
+                    }
+                    Text(
+                        text = "Opens the floating editor with the click area selected: drag " +
+                            "and resize it over the live app, then Save. The other boxes in " +
+                            "that editor are the search area and the template.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                     RegionFields(
                         rect = editing.clickRegion ?: PxRect(0, 0, 0, 0),
                         onChange = { r -> update { it.copy(clickRegion = r) } },

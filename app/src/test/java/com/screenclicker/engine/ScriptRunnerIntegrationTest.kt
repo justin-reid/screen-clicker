@@ -100,6 +100,8 @@ class ScriptRunnerIntegrationTest {
         tapResult: (Point) -> TapOutcome = { TapOutcome.DELIVERED },
         foregroundPackage: () -> String? = { null },
         targetPackage: String? = null,
+        /** Where the run overlay's own surface sits; empty means it was not reported. */
+        overlayGeometry: () -> String = { "" },
         /** Records the delays the runner asks for instead of actually waiting them. */
         waitTo: (Long) -> Unit = {},
     ): RunResult {
@@ -121,6 +123,7 @@ class ScriptRunnerIntegrationTest {
                     script = Script(name = "test", targetPackage = targetPackage, rules = listOf(rule)),
                     templates = mapOf(rule.id to template),
                     foregroundPackage = foregroundPackage,
+                    overlayGeometry = overlayGeometry,
                     onTap = { x, y ->
                         val point = Point(x, y)
                         taps += point
@@ -562,7 +565,7 @@ class ScriptRunnerIntegrationTest {
         val runner = ScriptRunner({ GlobalSettings(scanIntervalMs = 0) }, SequenceCapturer(listOf(f.capture(f.frame()))), { 10_000L }, {}, {})
         try {
             runBlocking {
-                runner.run(Script(rules = listOf(rule(f))), emptyMap(), { null }, { _, _ -> TapOutcome.DECLINED }, onEvent = events::add)
+                runner.run(Script(rules = listOf(rule(f))), emptyMap(), { null }, onTap = { _, _ -> TapOutcome.DECLINED }, onEvent = events::add)
             }
         } catch (_: CancellationException) {}
         assertTrue(events.any { it.contains("template could not be read") })
@@ -629,9 +632,26 @@ class ScriptRunnerIntegrationTest {
         val runner = ScriptRunner({ GlobalSettings() }, SequenceCapturer(emptyList()), { 10_000L }, {}, {})
         val events = mutableListOf<String>()
         runBlocking {
-            runner.run(Script(rules = listOf(noTemplate, disabled)), emptyMap(), { null }, { _, _ -> TapOutcome.DECLINED }, onEvent = events::add)
+            runner.run(Script(rules = listOf(noTemplate, disabled)), emptyMap(), { null }, onTap = { _, _ -> TapOutcome.DECLINED }, onEvent = events::add)
         }
         assertTrue(events.single().contains("No enabled rules"))
+    }
+
+    @Test
+    fun `the overlay's own surface is reported against the frame`() {
+        // The numbers that say whether drawn coordinates are display coordinates: an overlay
+        // the size of the display at the origin needs no correction, anything else is the
+        // offset that puts every drawn rectangle below the thing it describes.
+        val f = fixture()
+        val result = execute(
+            rule(f), f.template,
+            listOf(f.capture(f.frame(Point(50, 50)))),
+            overlayGeometry = { "240x149 at (0,31)" },
+        )
+        assertTrue(
+            "expected the overlay geometry line in ${result.events}",
+            result.events.any { it == "overlay 240x149 at (0,31) vs frame ${f.width}x${f.height}" },
+        )
     }
 
     @Test

@@ -76,6 +76,14 @@ class ScriptRunner(
         script: Script,
         templates: Map<String, GrayImage>,
         foregroundPackage: () -> String?,
+        /**
+         * Where the run overlay's own surface sits, as "<w>x<h> at (<x>,<y>)", for the run
+         * log. A seam, because the engine must not know about views — but the numbers belong
+         * in the log: an overlay whose content does not start at the display's own origin
+         * paints everything it draws that far from the coordinate it was given, and no
+         * rectangle in the run would show it.
+         */
+        overlayGeometry: () -> String = { "" },
         onTap: suspend (x: Int, y: Int) -> TapOutcome,
         /**
          * Reports each tap that was actually attempted: the bounds it was drawn inside, the
@@ -192,6 +200,13 @@ class ScriptRunner(
             if (!reportedFrame && regions.isNotEmpty()) {
                 reportedFrame = true
                 onEvent("frame ${frame.width}x${frame.height} via ${capturer.name}")
+                // Against the frame: an overlay the size of the display at the origin means
+                // drawn coordinates are display coordinates. Anything else is the offset that
+                // puts rectangles below what they describe.
+                val overlay = overlayGeometry()
+                if (overlay.isNotEmpty()) {
+                    onEvent("overlay $overlay vs frame ${frame.width}x${frame.height}")
+                }
                 // One line per rule: the alignment is what has to be checked against a
                 // mismatch, and a single long line gets clipped in the floating panel.
                 for ((ruleId, region) in regions) {

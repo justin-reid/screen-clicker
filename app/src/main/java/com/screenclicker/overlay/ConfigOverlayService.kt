@@ -88,11 +88,21 @@ class ConfigOverlayService : Service() {
         /** Let the compositor show the probe-only frame before asking for the screenshot. */
         private const val PROBE_SETTLE_MS = 200L
 
-        fun start(context: Context, ruleId: String) {
-            context.startForegroundService(
-                Intent(context, ConfigOverlayService::class.java)
-                    .putExtra(EXTRA_RULE_ID, ruleId),
-            )
+        /**
+         * Opens the floating editor for [ruleId].
+         *
+         * [role] names the area to show first. The rule editor's click-area button passes
+         * [RectBubbleView.Role.CLICK]: the editor has always been able to draw that area — it
+         * is one of the toolbar's three buttons — but the only way in was "Capture on screen"
+         * under Match settings, which reads as a template action and made the click area look
+         * like something you were not supposed to be able to edit. Leaving it null keeps the
+         * old behaviour (nothing drawn until a toolbar button is pressed).
+         */
+        fun start(context: Context, ruleId: String, role: RectBubbleView.Role? = null) {
+            val intent = Intent(context, ConfigOverlayService::class.java)
+                .putExtra(EXTRA_RULE_ID, ruleId)
+            if (role != null) intent.putExtra(EXTRA_ROLE, role.name)
+            context.startForegroundService(intent)
         }
 
         fun stop(context: Context) {
@@ -125,6 +135,7 @@ class ConfigOverlayService : Service() {
         }
 
         const val EXTRA_RULE_ID = "ruleId"
+        const val EXTRA_ROLE = "role"
     }
 
     private class Bubble(val view: RectBubbleView, val params: WindowManager.LayoutParams)
@@ -290,8 +301,12 @@ class ConfigOverlayService : Service() {
         toolbar?.setActiveRole(null)
         // Re-show whatever was on screen, against the freshly initialised rects. Re-starting
         // the editor for the same rule (or switching rules) must not leave an orphaned
-        // rectangle behind that the toolbar claims is not there.
-        if (previousRole != null) showRole(previousRole)
+        // rectangle behind that the toolbar claims is not there. A role asked for by the
+        // caller wins: that is the app's "draw the click area" button opening onto it.
+        val requestedRole = intent?.getStringExtra(EXTRA_ROLE)
+            ?.let { name -> RectBubbleView.Role.values().firstOrNull { it.name == name } }
+        val toShow = requestedRole ?: previousRole
+        if (toShow != null) showRole(toShow)
         syncServiceState()
 
         uiHandler.removeCallbacks(serviceWatchdog)
