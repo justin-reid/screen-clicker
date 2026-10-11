@@ -17,7 +17,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.ui.Modifier
 import com.screenclicker.capture.CaptureProjectionService
 import com.screenclicker.overlay.ControlPanelService
@@ -64,7 +68,20 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    AppRoot()
+                    // Edge-to-edge is enforced at targetSdk 36, so y=0 is under the status
+                    // bar: the screens' header buttons (Save/Done/Settings) sat behind it
+                    // and were reported as "too close to the top of the screen, hard to
+                    // click". Consume the system bars once, here, for every screen; a
+                    // screen that adds its own bar padding would double it.
+                    // systemBars rather than safeDrawing — IME insets are deliberately
+                    // left alone, so the keyboard behaves as it did before.
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .windowInsetsPadding(WindowInsets.systemBars),
+                    ) {
+                        AppRoot()
+                    }
                 }
             }
         }

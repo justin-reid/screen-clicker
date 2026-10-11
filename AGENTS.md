@@ -60,6 +60,14 @@ app/
 - **Overlay windows are plain Views, not Compose** (same reasoning as floating-dpad:
   Compose inside a `WindowManager` window needs lifecycle-owner shims and adds
   recomposition cost). Compose is for the in-app screens only.
+- **The app draws edge-to-edge, and MainActivity consumes the system bars once for every
+  screen.** targetSdk 36 means Android enforces edge-to-edge, so y=0 is under the status
+  bar — until round 23 the screens' header buttons (Save/Done/Settings) sat behind it and
+  were reported as "too close to the top of the screen, hard to click". The fix is one
+  `windowInsetsPadding(WindowInsets.systemBars)` Box around all screens in MainActivity;
+  screens must not add their own bar padding (that doubles it), and new screens get the
+  padding for free. Deliberately `systemBars` rather than `safeDrawing`: IME insets are
+  left alone so keyboard behaviour is unchanged.
 - **Overlay windows use FLAG_LAYOUT_NO_LIMITS + FLAG_LAYOUT_IN_SCREEN** so view
   coordinates equal screenshot pixels (status bar included). Never switch to default
   window geometry — every stored rect would be off by the status bar height.
