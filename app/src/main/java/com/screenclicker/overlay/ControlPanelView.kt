@@ -57,6 +57,7 @@ class ControlPanelView(
         fun onEditRule(scriptId: String, ruleId: String)
         fun onToggleDetections()
         fun onToggleTaps()
+        fun onToggleLog()
         fun onOpenApp()
         fun onClose()
         fun onEnableAccess()
@@ -78,6 +79,8 @@ class ControlPanelView(
         val detectionsShown: Boolean = true,
         /** Whether the tap markers are being drawn; the second overlay switch. */
         val tapsShown: Boolean = false,
+        /** Whether the runner's diagnostics are shown; the third switch of that shape. */
+        val panelLog: Boolean = true,
     )
 
     private val density = resources.displayMetrics.density
@@ -268,7 +271,12 @@ class ControlPanelView(
                     else -> "Idle"
                 },
             )
-            state.lastEvent?.let { append("\n$it") }
+            // The runner's diagnostics, behind the panel's own switch: frame size, the region
+            // each rule searched, the best score — what explains a detection failure, and a
+            // wall of text over the game once a rule works. The state line above is not part
+            // of it: that is the panel's indicator of what is running, and hiding it would
+            // leave the panel unable to say whether anything is happening at all.
+            if (state.panelLog) state.lastEvent?.let { append("\n$it") }
         }
 
         if (!state.expanded) return false
@@ -281,6 +289,7 @@ class ControlPanelView(
             state.accessibilityOn,
             state.detectionsShown,
             state.tapsShown,
+            state.panelLog,
         )
         if (structural == structuralKey) return false
         structuralKey = structural
@@ -333,6 +342,16 @@ class ControlPanelView(
                 context.getString(com.screenclicker.R.string.panel_taps),
                 state.tapsShown,
                 callbacks::onToggleTaps,
+            ),
+            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT),
+        )
+        // The runner's log line, the third switch of the same shape. Display only: the runner
+        // keeps producing its diagnostics, this decides whether the panel shows them.
+        content.addView(
+            overlaySwitch(
+                context.getString(com.screenclicker.R.string.panel_log),
+                state.panelLog,
+                callbacks::onToggleLog,
             ),
             LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT),
         )

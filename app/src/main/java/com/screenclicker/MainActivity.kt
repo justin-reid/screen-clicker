@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.ui.Modifier
 import com.screenclicker.capture.CaptureProjectionService
+import com.screenclicker.capture.consentIntentForWholeScreen
 import com.screenclicker.overlay.ControlPanelService
 import com.screenclicker.store.ScriptStore
 import com.screenclicker.store.SettingsRepo
@@ -52,7 +53,9 @@ class MainActivity : ComponentActivity() {
 
     private fun launchProjectionConsent() {
         val manager = getSystemService(MediaProjectionManager::class.java)
-        projectionConsent.launch(manager.createScreenCaptureIntent())
+        // The whole display, not the single app the dialog defaults to: the scripts click
+        // in display coordinates, and a single-app projection is not the screen.
+        projectionConsent.launch(manager.consentIntentForWholeScreen())
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

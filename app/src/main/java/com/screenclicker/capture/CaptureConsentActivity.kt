@@ -11,9 +11,10 @@ import kotlinx.coroutines.CompletableDeferred
 /**
  * Invisible trampoline for the system's screen-capture consent dialog.
  *
- * `MediaProjectionManager.createScreenCaptureIntent()` can only be answered by an
- * Activity — the result comes back through `onActivityResult`, which a Service has no
- * way to receive. So when a script is started from the floating panel or the rule
+ * The system's screen-capture consent dialog can only be answered by an Activity — the
+ * result comes back through `onActivityResult`, which a Service has no way to receive.
+ * The request itself comes from [consentIntentForWholeScreen], which asks for the whole
+ * display rather than letting the dialog default to a single app. So when a script is started from the floating panel or the rule
  * editor captures the screen while no capture session is live, this activity is
  * launched from the background (permitted for apps with the overlay permission, which
  * Screen Clicker always has), shows nothing itself, and puts the system's dialog on
@@ -72,7 +73,7 @@ class CaptureConsentActivity : Activity() {
             finish()
             return
         }
-        startActivityForResult(manager.createScreenCaptureIntent(), REQUEST_CODE)
+        startActivityForResult(manager.consentIntentForWholeScreen(), REQUEST_CODE)
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {

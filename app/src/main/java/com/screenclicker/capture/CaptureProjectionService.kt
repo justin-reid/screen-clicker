@@ -23,6 +23,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import android.view.WindowManager
+import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.IntentCompat
@@ -85,6 +86,9 @@ class CaptureProjectionService : Service() {
     @Volatile
     private var mirrorHeight = 0
 
+    /** Set once, so the single-app warning is not repeated on every resize report. */
+    private var warnedAboutCapturedContent = false
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -129,6 +133,31 @@ class CaptureProjectionService : Service() {
                     Log.i(TAG, "projection stopped by system/user")
                     stopSelf()
                 }
+
+                /**
+                 * The size of the content actually being captured, when the system decides it
+                 * differs from the mirror that was asked for. "Share a single app" is exactly
+                 * that case: one app's window, letterboxed inside a display-sized frame.
+                 * Nothing downstream can tell — the frames arrive, they are simply not the
+                 * screen — so the mismatch is named here rather than being left as a run that
+                 * matches nothing and clicks nowhere.
+                 *
+                 * A rotation reports the mirror's size transposed (the same pixels, swapped),
+                 * so only a report that is genuinely *smaller* than the mirror is treated as
+                 * one-app capture: warning about every rotation would train the user to
+                 * dismiss this warning.
+                 */
+                override fun onCapturedContentResize(width: Int, height: Int) {
+                    val smaller = (width == mirrorWidth && height < mirrorHeight) ||
+                        (height == mirrorHeight && width < mirrorWidth) ||
+                        (width < mirrorWidth && height < mirrorHeight)
+                    if (!smaller) return
+                    Log.w(
+                        TAG,
+                        "captured content is ${width}x$height, not the ${mirrorWidth}x$mirrorHeight display",
+                    )
+                    warnCaptureIsOneApp()
+                }
             },
             null,
         )
@@ -158,6 +187,26 @@ class CaptureProjectionService : Service() {
         }
         displayManager.registerDisplayListener(listener, Handler(Looper.getMainLooper()))
         displayListener = listener
+    }
+
+    /**
+     * Tells the user, once per session, that capture is limited to a single app.
+     *
+     * The projection is display-sized either way, so this cannot be seen in the frames: the
+     * run simply never matches and never clicks, which is the least debuggable failure this
+     * app has. Android 14 offers "share a single app" in the consent dialog, and
+     * [consentIntentForWholeScreen] asks for the whole display to keep the single-app picker
+     * out of the way — if it shows up anyway (an OEM dialog, a user who chose it deliberately,
+     * a permission granted from a different screen), one loud sentence beats a silent no-op.
+     */
+    private fun warnCaptureIsOneApp() {
+        if (warnedAboutCapturedContent) return
+        warnedAboutCapturedContent = true
+        Toast.makeText(
+            this,
+            getString(R.string.capture_single_app_warning),
+            Toast.LENGTH_LONG,
+        ).show()
     }
 
     /**

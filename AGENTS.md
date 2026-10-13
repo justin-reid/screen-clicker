@@ -30,6 +30,17 @@ reaction-time floor of the accessibility backend. The design answer:
   `mediaProjection` BEFORE `getMediaProjection()` on Android 14+. A static screen emits
   no frame callbacks at all, so its capture() returns the newest cached frame — the
   correct answer when nothing changed.
+- **The capture consent dialog must ask for the whole display.** Both entry points (the
+  app's button and `CaptureConsentActivity`) go through `consentIntentForWholeScreen`,
+  which passes `MediaProjectionConfig.createConfigForDefaultDisplay()` on API 34+. Android
+  14 added "share a single app" and made it the dialog's *default* selection; the
+  no-argument `createScreenCaptureIntent()` is the "user choice" variant that produces that
+  default. A single-app projection is one app's window letterboxed inside a display-sized
+  frame, so every region and every tap — all of them display coordinates — lands somewhere
+  else, and the run finds nothing with no error to explain it. `CaptureProjectionService`
+  also warns once when `onCapturedContentResize` reports content smaller than the mirror:
+  that callback is the only place a single-app projection is visible at all, since the
+  frames themselves are display-sized either way.
 - `Capturers.pick(settings)` resolves the backend at script start: auto (fast when
   granted) / accessibility / fast. Backend changes take effect on the next run.
 

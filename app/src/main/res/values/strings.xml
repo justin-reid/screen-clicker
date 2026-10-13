@@ -49,6 +49,8 @@
     <string name="panel_rules">Rules</string>
     <string name="panel_edit">Edit</string>
     <string name="panel_open_app">Open app</string>
+    <string name="panel_log">Runner log</string>
+    <string name="capture_single_app_warning">Screen capture is limited to one app — the script needs the whole screen. Stop the script and grant screen capture again, choosing "Entire screen".</string>
     <string name="panel_minimize">Minimize panel</string>
     <string name="panel_close">Close panel</string>
     <string name="panel_close_blocked">A script is running — stop it before closing the panel</string>

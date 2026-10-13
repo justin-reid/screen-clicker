@@ -26,6 +26,18 @@ data class GlobalSettings(
      */
     val showTaps: Boolean = false,
     /**
+     * Show the runner's per-scan diagnostics in the floating panel's status line.
+     *
+     * The log is what explains a detection failure (frame size, the region each rule searched,
+     * the best score) and it is several lines of exactly that once a rule works, which is why
+     * it is a switch like the two overlay layers rather than a fixture. The panel's state line
+     * ("Running: X" / "Idle") is not part of it and is never hidden — that is the panel's
+     * indicator of what is running, not log output. On by default: it is the panel's
+     * explanation of a run that finds nothing, and a switch that starts off hides exactly the
+     * information needed to decide to turn it on.
+     */
+    val panelLog: Boolean = true,
+    /**
      * Minimum time between screen scans while running.
      *
      * A floor, not a target: the loop waits only for the remainder of this after the work it

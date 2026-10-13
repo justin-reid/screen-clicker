@@ -284,6 +284,9 @@ class ControlPanelService : Service() {
         val view = panelView ?: return
         val runningId = ClickerAccessibilityService.runningScriptId.value
         val expandedId = expandedScriptId
+        // One read for all three switches: render() runs on every runner event, several times
+        // a second.
+        val settings = settingsRepo.load()
         val rules = expandedId
             ?.let { id -> scripts.firstOrNull { it.id == id } }
             ?.rules
@@ -313,8 +316,9 @@ class ControlPanelService : Service() {
                 accessibilityOn = accessibilityOn,
                 // Read live rather than cached, so the app's own switches and these can
                 // never disagree about what is being drawn.
-                detectionsShown = settingsRepo.load().showDetections,
-                tapsShown = settingsRepo.load().showTaps,
+                detectionsShown = settings.showDetections,
+                tapsShown = settings.showTaps,
+                panelLog = settings.panelLog,
             ),
         )
         // Runner events arrive several times a second; only re-measure when something
@@ -424,6 +428,15 @@ class ControlPanelService : Service() {
             // Same visibility flip as the rectangles, and independent of them: turning the
             // tap markers on while the match boxes are off is the point of the feature.
             ClickerAccessibilityService.setTapsEnabled(next)
+            render()
+        }
+
+        override fun onToggleLog() {
+            val repo = settingsRepo
+            val next = !repo.load().panelLog
+            repo.save(repo.load().copy(panelLog = next))
+            // Display only — the runner keeps emitting its diagnostics and this decides whether
+            // the panel draws them — so there is nothing to tell the accessibility service.
             render()
         }
 

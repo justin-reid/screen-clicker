@@ -155,6 +155,26 @@ fun AppSettingsScreen(
                         "are usually the thing to switch off while watching the taps.",
                     style = MaterialTheme.typography.bodySmall,
                 )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                ) {
+                    Text("Show the runner log in the floating panel")
+                    Switch(
+                        checked = settings.panelLog,
+                        onCheckedChange = { on -> save(settings.copy(panelLog = on)) },
+                    )
+                }
+                Text(
+                    text = "The panel's status line, a few lines per scan: the frame size, the " +
+                        "region each rule searched, the best score it found. It is what explains " +
+                        "a run that matches nothing, and it is a wall of text over the game once " +
+                        "a rule works — so it is a switch like the two overlays above, and the " +
+                        "floating panel has the same one. The panel's \"Running: / Idle\" line " +
+                        "is not part of the log and is always shown.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
         }
 
