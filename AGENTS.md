@@ -90,6 +90,15 @@ app/
   The header's two controls are minimize (a bar) and close (a cross), both drawn on a
   canvas rather than typed as text: `GlyphButton` exists so the pair shares a stroke, a
   length and an optical centre, which no font glyph does.
+- **The panel is compact before it is complete.** Its three switches (highlight matches,
+  tap markers, the runner log) sit behind one `Options` disclosure row in
+  `ControlPanelView`: as permanent rows they cost the panel a large share of its height,
+  and they are controls for the overlays rather than anything a running script needs in
+  front of it. Collapsed by default, and `ControlPanelService.optionsExpanded` is
+  deliberately *not* persisted — like `expandedScriptId` it is where the user left the
+  panel open, not a setting, so a restarted panel always comes back compact. The folded
+  rows are not added to the view at all rather than hidden, and the flag is part of the
+  structural key so the fold actually rebuilds the list.
 - **Overlay windows use FLAG_LAYOUT_NO_LIMITS + FLAG_LAYOUT_IN_SCREEN** so view
   coordinates equal screenshot pixels (status bar included). Never switch to default
   window geometry — every stored rect would be off by the status bar height.

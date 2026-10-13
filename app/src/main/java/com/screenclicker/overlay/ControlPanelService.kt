@@ -176,6 +176,14 @@ class ControlPanelService : Service() {
     private var expandedScriptId: String? = null
     private var accessibilityOn = true
 
+    /**
+     * Whether the panel's Options row is unfolded. Not persisted, like [expandedScriptId]:
+     * this is where the user left the panel open, not a setting, and a restart of the panel
+     * comes back compact. Minimizing deliberately keeps it — the panel is put away and comes
+     * back exactly as it was.
+     */
+    private var optionsExpanded = false
+
     private var logicalX = 0
     private var logicalY = 0
 
@@ -319,6 +327,7 @@ class ControlPanelService : Service() {
                 detectionsShown = settings.showDetections,
                 tapsShown = settings.showTaps,
                 panelLog = settings.panelLog,
+                optionsExpanded = optionsExpanded,
             ),
         )
         // Runner events arrive several times a second; only re-measure when something
@@ -437,6 +446,13 @@ class ControlPanelService : Service() {
             repo.save(repo.load().copy(panelLog = next))
             // Display only — the runner keeps emitting its diagnostics and this decides whether
             // the panel draws them — so there is nothing to tell the accessibility service.
+            render()
+        }
+
+        override fun onToggleOptions() {
+            // Pure view state: the switches inside read their values from the settings on every
+            // render, and folding them away changes nothing about what is being drawn.
+            optionsExpanded = !optionsExpanded
             render()
         }
 

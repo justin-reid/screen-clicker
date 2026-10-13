@@ -58,6 +58,7 @@ class ControlPanelView(
         fun onToggleDetections()
         fun onToggleTaps()
         fun onToggleLog()
+        fun onToggleOptions()
         fun onOpenApp()
         fun onClose()
         fun onEnableAccess()
@@ -73,6 +74,15 @@ class ControlPanelView(
         val runningScriptId: String? = null,
         val expandedScriptId: String? = null,
         val rules: List<RuleRow> = emptyList(),
+        /**
+         * Whether the row of switches below the script list is unfolded.
+         *
+         * Collapsed by default, and deliberately not persisted: three rows of On/Off buttons
+         * are panel height whether or not they are ever touched, and this panel floats over the
+         * game it is automating. Whichever way the user last left it, reopening the panel is
+         * compact.
+         */
+        val optionsExpanded: Boolean = false,
         val lastEvent: String? = null,
         val accessibilityOn: Boolean = true,
         /** Whether the match rectangles are being drawn; drives the panel's own switch. */
@@ -290,6 +300,7 @@ class ControlPanelView(
             state.detectionsShown,
             state.tapsShown,
             state.panelLog,
+            state.optionsExpanded,
         )
         if (structural == structuralKey) return false
         structuralKey = structural
@@ -324,37 +335,46 @@ class ControlPanelView(
             content.addView(enable, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         }
 
-        // The two overlay switches, both live mid-run. The match rectangles earn their keep
-        // while a rule is being set up and are clutter once it works; the tap markers are how
-        // "is the click really placed at random inside the area?" gets checked — and the two
-        // are wanted in opposite combinations, which is why they are separate rows. Same
-        // settings as the app's screen, applied the moment they are tapped.
+        // The three switches fold away behind one row (see [optionsRow]): as permanent rows
+        // they cost the panel a large share of its height, and they are controls for the
+        // overlays and this panel's own log rather than anything a run needs in front of it.
         content.addView(
-            overlaySwitch(
-                context.getString(com.screenclicker.R.string.panel_detections),
-                state.detectionsShown,
-                callbacks::onToggleDetections,
-            ),
+            optionsRow(state.optionsExpanded) { callbacks.onToggleOptions() },
             LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT),
         )
-        content.addView(
-            overlaySwitch(
-                context.getString(com.screenclicker.R.string.panel_taps),
-                state.tapsShown,
-                callbacks::onToggleTaps,
-            ),
-            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT),
-        )
-        // The runner's log line, the third switch of the same shape. Display only: the runner
-        // keeps producing its diagnostics, this decides whether the panel shows them.
-        content.addView(
-            overlaySwitch(
-                context.getString(com.screenclicker.R.string.panel_log),
-                state.panelLog,
-                callbacks::onToggleLog,
-            ),
-            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT),
-        )
+        if (state.optionsExpanded) {
+            // The switches themselves: match rectangles earn their keep while a rule is being
+            // set up and are clutter once it works; tap markers are how "is the click really
+            // placed at random inside the area?" gets checked; the log line is the runner's
+            // explanation of a run. Same three settings as the app's screen, applied the
+            // moment they are tapped, live mid-run.
+            content.addView(
+                overlaySwitch(
+                    context.getString(com.screenclicker.R.string.panel_detections),
+                    state.detectionsShown,
+                    callbacks::onToggleDetections,
+                ),
+                LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT),
+            )
+            content.addView(
+                overlaySwitch(
+                    context.getString(com.screenclicker.R.string.panel_taps),
+                    state.tapsShown,
+                    callbacks::onToggleTaps,
+                ),
+                LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT),
+            )
+            // Display only: the runner keeps producing its diagnostics, this decides whether
+            // the panel draws them.
+            content.addView(
+                overlaySwitch(
+                    context.getString(com.screenclicker.R.string.panel_log),
+                    state.panelLog,
+                    callbacks::onToggleLog,
+                ),
+                LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT),
+            )
+        }
 
         // "Open app" only. The footer's old text "Hide" was in fact this panel's close,
         // and a control that dismisses the panel belongs with the other window controls in
@@ -415,6 +435,37 @@ class ControlPanelView(
         row.addView(textButton(context.getString(com.screenclicker.R.string.panel_edit)) {
             callbacks.onEditRule(scriptId, rule.id)
         })
+        return row
+    }
+
+    /**
+     * The row that folds the three switches away.
+     *
+     * The whole row is the touch target, not a button at its end: a disclosure is aimed at by
+     * its label, and a full-width [BUTTON_DP]-tall row is the same target the rows above it end
+     * in a button anyway. The chevron is drawn as text — geometric shapes the panel already
+     * renders for its play and stop glyphs — so it cannot land in the wrong place in a font
+     * that puts a bar somewhere else on the line.
+     */
+    private fun optionsRow(expanded: Boolean, onToggle: () -> Unit): View {
+        val row = LinearLayout(context).apply {
+            orientation = HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            isClickable = true
+            isFocusable = true
+            minimumHeight = dp(BUTTON_DP)
+            setOnClickListener { onToggle() }
+        }
+        row.addView(
+            TextView(context).apply {
+                text = (if (expanded) "\u25BE " else "\u25B8 ") +
+                    context.getString(com.screenclicker.R.string.panel_options)
+                setTextColor(0xFFCFD8DC.toInt())
+                textSize = 12f
+                gravity = Gravity.CENTER_VERTICAL
+            },
+            LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f),
+        )
         return row
     }
 
