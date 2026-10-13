@@ -68,6 +68,17 @@ app/
   screens must not add their own bar padding (that doubles it), and new screens get the
   padding for free. Deliberately `systemBars` rather than `safeDrawing`: IME insets are
   left alone so keyboard behaviour is unchanged.
+- **A running script must always have a stop control, and the floating panel is it.**
+  Three rules hold that up, and all three are needed: every script start calls
+  `ControlPanelService.ensureRunning` (from `startScript`, so a new way to start a script
+  inherits it); while `runningScriptId != null` the panel's close control is not drawn
+  *and* `onClose` / `setFloatingPanel(false)` refuse with a toast, because dismissing the
+  panel mid-run leaves a script that can only be stopped by opening the app; and what
+  comes back is the collapsed 40dp bubble — the panel's always-there state, carrying the
+  running indicator — never an expanded panel landing on top of the app being automated.
+  The header's two controls are minimize (a bar) and close (a cross), both drawn on a
+  canvas rather than typed as text: `GlyphButton` exists so the pair shares a stroke, a
+  length and an optical centre, which no font glyph does.
 - **Overlay windows use FLAG_LAYOUT_NO_LIMITS + FLAG_LAYOUT_IN_SCREEN** so view
   coordinates equal screenshot pixels (status bar included). Never switch to default
   window geometry — every stored rect would be off by the status bar height.

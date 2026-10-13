@@ -62,6 +62,34 @@ class ControlPanelService : Service() {
             context.startForegroundService(Intent(context, ControlPanelService::class.java))
         }
 
+        /**
+         * Guarantees the panel is on screen, because a running script has to stay
+         * stoppable. Every script start goes through here: with the panel closed, a run
+         * started from the app or from the tile leaves no stop control anywhere the user
+         * can reach without opening the app — the tile can start a script and, by design,
+         * has no stop affordance of its own.
+         *
+         * Starts collapsed. The bubble is the panel's "always there" state and carries the
+         * running indicator, and expanding it — one tap — is what a user does when they
+         * want Stop; an expanded panel would land on top of whatever the script is
+         * automating at the moment the user asked for it to run.
+         *
+         * The saved setting is re-armed as well: if this service is later killed (low
+         * memory, a reboot) the next app launch brings the panel back instead of leaving
+         * the run with no way out.
+         */
+        fun ensureRunning(context: Context) {
+            // Nothing can be shown without the overlay permission. The app's own screen is
+            // where that is explained, and a service that starts only to fail to add its
+            // window is a notification flash rather than a control.
+            if (!Settings.canDrawOverlays(context)) return
+            val repo = SettingsRepo(context)
+            if (!repo.load().controlPanelEnabled) {
+                repo.save(repo.load().copy(controlPanelEnabled = true))
+            }
+            if (instance == null) start(context)
+        }
+
         fun stop(context: Context) {
             context.stopService(Intent(context, ControlPanelService::class.java))
         }
@@ -152,7 +180,10 @@ class ControlPanelService : Service() {
     private var logicalY = 0
 
     private val density: Float by lazy { resources.displayMetrics.density }
-    private val collapsedSizePx: Int by lazy { (64 * density).toInt() }
+    // Derived from the view's own constants, so the window and the bubble inside it cannot
+    // drift apart the way two independently hard-coded numbers would. 40 + 2 * 4 = 48dp.
+    private val collapsedSizePx: Int
+        get() = ((ControlPanelView.BUBBLE_DP + 2 * ControlPanelView.BUBBLE_MARGIN_DP) * density).toInt()
     private val expandedWidthPx: Int by lazy { (300 * density).toInt() }
     private val statusBarInset: Int by lazy {
         windowManager.currentWindowMetrics.windowInsets
@@ -407,7 +438,20 @@ class ControlPanelService : Service() {
             }
         }
 
-        override fun onHide() {
+        override fun onClose() {
+            // A running script is stopped from this panel and nowhere else, so a close that
+            // lands mid-run is refused. The button is not drawn while a script runs (see
+            // ControlPanelView.render); this is the belt for the tap already in flight when
+            // the run starts.
+            if (ClickerAccessibilityService.runningScriptId.value != null) {
+                Toast.makeText(
+                    this@ControlPanelService,
+                    getString(R.string.panel_close_blocked),
+                    Toast.LENGTH_LONG,
+                ).show()
+                render()
+                return
+            }
             // Keep the saved preference in step, or the app would restart the panel on
             // the next launch after the user deliberately dismissed it.
             val repo = SettingsRepo(this@ControlPanelService)

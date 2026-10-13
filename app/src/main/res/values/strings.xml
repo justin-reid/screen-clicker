@@ -49,7 +49,9 @@
     <string name="panel_rules">Rules</string>
     <string name="panel_edit">Edit</string>
     <string name="panel_open_app">Open app</string>
-    <string name="panel_hide">Hide</string>
+    <string name="panel_minimize">Minimize panel</string>
+    <string name="panel_close">Close panel</string>
+    <string name="panel_close_blocked">A script is running — stop it before closing the panel</string>
     <string name="panel_accessibility_off">Accessibility service is OFF — nothing can be tapped. Enable it below.</string>
     <string name="panel_needs_accessibility">Enable the Screen Clicker accessibility service first</string>
     <string name="panel_needs_overlay_permission">Allow "display over other apps" to edit rules on screen</string>

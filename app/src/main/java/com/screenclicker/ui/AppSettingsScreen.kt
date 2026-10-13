@@ -371,6 +371,17 @@ internal fun Context.openAccessibilitySettings() {
  */
 internal fun setFloatingPanel(context: Context, enabled: Boolean) {
     val repo = SettingsRepo(context)
+    if (!enabled && ClickerAccessibilityService.runningScriptId.value != null) {
+        // The same rule as the panel's own close control: while a script runs the panel is
+        // the only place it can be stopped from, so it must not be dismissible from here
+        // either. This button works again once the script is stopped.
+        Toast.makeText(
+            context,
+            context.getString(com.screenclicker.R.string.panel_close_blocked),
+            Toast.LENGTH_LONG,
+        ).show()
+        return
+    }
     repo.save(repo.load().copy(controlPanelEnabled = enabled))
     if (!enabled) {
         ControlPanelService.stop(context)

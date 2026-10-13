@@ -1,7 +1,9 @@
 package com.screenclicker.overlay
 
 import android.content.Context
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
 import android.text.TextUtils
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
@@ -22,11 +24,30 @@ import kotlin.math.abs
  * no switching back and forth to the launcher.
  *
  * Views, not Compose: it lives in a window over other apps, like the editor overlays.
+ *
+ * Its header carries two controls, both drawn rather than typed (see [GlyphButton]): a
+ * minimize bar, and a close cross that is withheld for as long as a script is running.
+ * This panel is the only place a run can be stopped from, so it must not be closable
+ * while there is something to stop — and a script starting brings the panel back if the
+ * user had closed it (see ControlPanelService.ensureRunning).
  */
 class ControlPanelView(
     context: Context,
     private val callbacks: Callbacks,
 ) : LinearLayout(context) {
+
+    companion object {
+        /**
+         * The collapsed bubble's diameter, and the margin the panel keeps around it. The
+         * service sizes the collapsed window from these two numbers: 40 + 2 * 4 = 48dp,
+         * which is also the comfortable minimum touch target.
+         */
+        const val BUBBLE_DP = 40
+        const val BUBBLE_MARGIN_DP = 4
+
+        /** Touch target of the two header controls, matching the text buttons' 44dp. */
+        const val BUTTON_DP = 44
+    }
 
     interface Callbacks {
         fun onToggleExpanded()
@@ -37,7 +58,7 @@ class ControlPanelView(
         fun onToggleDetections()
         fun onToggleTaps()
         fun onOpenApp()
-        fun onHide()
+        fun onClose()
         fun onEnableAccess()
     }
 
@@ -64,7 +85,7 @@ class ControlPanelView(
     private val bubble = TextView(context).apply {
         text = "\u25B6"
         setTextColor(Color.WHITE)
-        textSize = 22f
+        textSize = 18f
         gravity = Gravity.CENTER
         background = rounded(0xFF2E4A5A.toInt(), 0x66FFFFFF)
     }
@@ -83,6 +104,28 @@ class ControlPanelView(
         setTextColor(Color.WHITE)
         textSize = 13f
     }
+    /**
+     * Collapses the panel back to the bubble. Always offered: minimizing never strands a
+     * run — the bubble stays on screen, and one tap reopens the panel.
+     */
+    private val minimizeButton = glyphButton(
+        GlyphButton.Glyph.MINIMIZE,
+        0xFFCFD8DC.toInt(),
+        context.getString(com.screenclicker.R.string.panel_minimize),
+    ) { callbacks.onToggleExpanded() }
+
+    /**
+     * Dismisses the panel and takes the saved setting down with it (the service's onClose
+     * does that part). Warm-tinted because it is the destructive one of the two, and
+     * hidden while a script runs — [render] decides that from the run state, which is the
+     * state that makes a close dangerous.
+     */
+    private val closeButton = glyphButton(
+        GlyphButton.Glyph.CLOSE,
+        0xFFEF9A9A.toInt(),
+        context.getString(com.screenclicker.R.string.panel_close),
+    ) { callbacks.onClose() }
+
     private val content = LinearLayout(context).apply { orientation = VERTICAL }
     private val panel = ScrollView(context).apply {
         addView(content)
@@ -92,7 +135,14 @@ class ControlPanelView(
     init {
         orientation = VERTICAL
         background = rounded(0xE6121720.toInt(), 0x55FFFFFF)
-        setPadding(dp(6), dp(6), dp(6), dp(6))
+        // Not decoration: the collapsed window is the bubble plus exactly this margin, so
+        // the service derives its window size from these same constants.
+        setPadding(
+            dp(BUBBLE_MARGIN_DP),
+            dp(BUBBLE_MARGIN_DP),
+            dp(BUBBLE_MARGIN_DP),
+            dp(BUBBLE_MARGIN_DP),
+        )
 
         // Bubble: tap expands, drag moves. Total movement decides which it was.
         var lastRawX = 0f
@@ -137,14 +187,17 @@ class ControlPanelView(
                 else -> false
             }
         }
-        addView(bubble, LayoutParams(dp(52), dp(52)))
+        addView(bubble, LayoutParams(dp(BUBBLE_DP), dp(BUBBLE_DP)))
 
-        // Panel header doubles as the drag handle.
-        val header = LinearLayout(context).apply { orientation = HORIZONTAL }
+        // Panel header doubles as the drag handle, and holds both controls in the order
+        // every window manager uses: minimize, then close.
+        val header = LinearLayout(context).apply {
+            orientation = HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
         header.addView(title, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
-        val close = textButton("\u2715") { callbacks.onToggleExpanded() }
-        close.setTextColor(0xFFEF9A9A.toInt())
-        header.addView(close)
+        header.addView(minimizeButton, LayoutParams(dp(BUTTON_DP), dp(BUTTON_DP)))
+        header.addView(closeButton, LayoutParams(dp(BUTTON_DP), dp(BUTTON_DP)))
         var headerLastX = 0f
         var headerLastY = 0f
         var headerAccX = 0f
@@ -199,6 +252,11 @@ class ControlPanelView(
         panel.visibility = if (state.expanded) VISIBLE else GONE
         // Set before the early return: the collapsed bubble is the state indicator.
         bubble.text = if (state.runningScriptId == null) "\u25B6" else "\u25A0"
+        // The close control exists only when there is nothing to strand. While a script
+        // runs this panel is the only place it can be stopped from, so the panel offers
+        // minimize and nothing else; the service refuses a close either way, and hiding
+        // the button is what stops the rule from looking like a broken button.
+        closeButton.visibility = if (state.runningScriptId == null) VISIBLE else GONE
 
         val runningName = state.scripts.firstOrNull { it.id == state.runningScriptId }?.name
         statusText.text = buildString {
@@ -279,12 +337,13 @@ class ControlPanelView(
             LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT),
         )
 
+        // "Open app" only. The footer's old text "Hide" was in fact this panel's close,
+        // and a control that dismisses the panel belongs with the other window controls in
+        // the header — not as a text button at the bottom edge of the screen, which is
+        // also the hardest place on the display to reach.
         val footer = LinearLayout(context).apply { orientation = HORIZONTAL }
         footer.addView(textButton(context.getString(com.screenclicker.R.string.panel_open_app)) {
             callbacks.onOpenApp()
-        })
-        footer.addView(textButton(context.getString(com.screenclicker.R.string.panel_hide)) {
-            callbacks.onHide()
         })
         content.addView(footer, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         return true
@@ -372,6 +431,62 @@ class ControlPanelView(
         setTextColor(0xFF90A4AE.toInt())
         textSize = 11f
         setPadding(dp(4), dp(2), dp(4), dp(2))
+    }
+
+    /** One of the header's two icon controls. */
+    private fun glyphButton(
+        glyph: GlyphButton.Glyph,
+        tint: Int,
+        description: String,
+        onClick: () -> Unit,
+    ): GlyphButton = GlyphButton(context, glyph, tint).apply {
+        contentDescription = description
+        setOnClickListener { onClick() }
+    }
+
+    /**
+     * An icon button that draws its own glyph.
+     *
+     * The panel's two controls have to read as siblings — same stroke, same length, same
+     * optical centre — and only drawing them guarantees that. Text never did: "\u2715" on
+     * the collapse button read as "close this panel", and a bar character sits wherever
+     * the font's baseline puts it instead of on the button's midline. Two canvas lines put
+     * the cross and the bar on the same centre in every font and locale, and a cross is
+     * what close looks like everywhere else on the device.
+     */
+    private class GlyphButton(
+        context: Context,
+        private val glyph: Glyph,
+        tint: Int,
+    ) : View(context) {
+
+        enum class Glyph { MINIMIZE, CLOSE }
+
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = tint
+            style = Paint.Style.STROKE
+            strokeWidth = 2 * resources.displayMetrics.density
+            strokeCap = Paint.Cap.ROUND
+        }
+        private val arm = 7 * resources.displayMetrics.density
+
+        init {
+            isClickable = true
+            setWillNotDraw(false)
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            val cx = width / 2f
+            val cy = height / 2f
+            when (glyph) {
+                Glyph.MINIMIZE -> canvas.drawLine(cx - arm, cy, cx + arm, cy, paint)
+                Glyph.CLOSE -> {
+                    canvas.drawLine(cx - arm, cy - arm, cx + arm, cy + arm, paint)
+                    canvas.drawLine(cx + arm, cy - arm, cx - arm, cy + arm, paint)
+                }
+            }
+        }
     }
 
     private fun textButton(label: String, onClick: () -> Unit): Button =

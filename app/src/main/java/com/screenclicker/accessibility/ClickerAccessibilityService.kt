@@ -191,6 +191,10 @@ class ClickerAccessibilityService : AccessibilityService() {
         fun startScript(context: android.content.Context, scriptId: String): Boolean {
             val service = instance ?: return false
             service.beginRunWithConsent(scriptId)
+            // A run must never be un-stoppable, and the panel is where Stop lives: if the
+            // user had closed it, a script starting brings it back. Deliberately here
+            // rather than at each call site, so any new way to start a script inherits it.
+            ControlPanelService.ensureRunning(context.applicationContext)
             return true
         }
 
