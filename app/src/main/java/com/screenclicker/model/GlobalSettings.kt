@@ -51,4 +51,6 @@ data class GlobalSettings(
     val captureBackend: String = "auto",
     /** Show the floating control panel, so scripts run without opening the app. */
     val controlPanelEnabled: Boolean = false,
+    /** The first-run tutorial has been seen (or skipped) — it only opens itself once. */
+    val tutorialSeen: Boolean = false,
 )

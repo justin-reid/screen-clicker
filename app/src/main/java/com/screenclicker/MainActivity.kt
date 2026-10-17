@@ -30,6 +30,7 @@ import com.screenclicker.store.ScriptStore
 import com.screenclicker.store.SettingsRepo
 import com.screenclicker.ui.Screen
 import com.screenclicker.ui.ScriptEditorScreen
+import com.screenclicker.ui.TutorialDialog
 import com.screenclicker.ui.RuleEditorScreen
 import com.screenclicker.ui.ScriptsScreen
 import com.screenclicker.ui.AppSettingsScreen
@@ -93,6 +94,9 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun AppRoot() {
         var screen by remember { mutableStateOf<Screen>(Screen.Scripts) }
+        // The first-run tutorial: once, before anything else is used. Skipping counts
+        // as seen; Settings → Help → "Show the tutorial again" re-opens it.
+        var showTutorial by remember { mutableStateOf(!settingsRepo.load().tutorialSeen) }
         when (val current = screen) {
             Screen.Scripts -> ScriptsScreen(
                 store = store,
@@ -118,7 +122,16 @@ class MainActivity : ComponentActivity() {
             Screen.Settings -> AppSettingsScreen(
                 settingsRepo = settingsRepo,
                 onGrantProjection = ::launchProjectionConsent,
+                onShowTutorial = { showTutorial = true },
                 onBack = { screen = Screen.Scripts },
+            )
+        }
+        if (showTutorial) {
+            TutorialDialog(
+                onDismiss = {
+                    settingsRepo.save(settingsRepo.load().copy(tutorialSeen = true))
+                    showTutorial = false
+                },
             )
         }
     }

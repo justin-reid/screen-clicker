@@ -24,6 +24,7 @@ class SettingsRepo(context: Context) {
         scanIntervalMs = prefs.getLong(KEY_SCAN_INTERVAL, 150L),
         captureBackend = prefs.getString(KEY_BACKEND, "auto").orEmpty().ifBlank { "auto" },
         controlPanelEnabled = prefs.getBoolean(KEY_CONTROL_PANEL, false),
+        tutorialSeen = prefs.getBoolean(KEY_TUTORIAL_SEEN, false),
     )
 
     fun save(settings: GlobalSettings) {
@@ -38,6 +39,7 @@ class SettingsRepo(context: Context) {
             .putLong(KEY_SCAN_INTERVAL, settings.scanIntervalMs)
             .putString(KEY_BACKEND, settings.captureBackend)
             .putBoolean(KEY_CONTROL_PANEL, settings.controlPanelEnabled)
+            .putBoolean(KEY_TUTORIAL_SEEN, settings.tutorialSeen)
             .apply()
     }
 
@@ -60,5 +62,6 @@ class SettingsRepo(context: Context) {
         const val KEY_SCAN_INTERVAL = "scanIntervalMs"
         const val KEY_BACKEND = "captureBackend"
         const val KEY_CONTROL_PANEL = "controlPanelEnabled"
+        const val KEY_TUTORIAL_SEEN = "tutorialSeen"
     }
 }

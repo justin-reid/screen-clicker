@@ -58,6 +58,7 @@ import kotlinx.coroutines.launch
 fun AppSettingsScreen(
     settingsRepo: SettingsRepo,
     onGrantProjection: () -> Unit,
+    onShowTutorial: () -> Unit,
     onBack: () -> Unit,
 ) {
     var settings by remember { mutableStateOf(settingsRepo.load()) }
@@ -186,6 +187,7 @@ fun AppSettingsScreen(
         FloatingPanelCard()
         AccessibilityCard()
         DiagnosticsCard()
+        HelpCard(onShowTutorial)
     }
 }
 
@@ -481,6 +483,18 @@ private fun FloatingPanelCard() {
                     "create scripts and change settings.",
                 style = MaterialTheme.typography.bodySmall,
             )
+        }
+    }
+}
+
+@Composable
+private fun HelpCard(onShowTutorial: () -> Unit) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Help", style = MaterialTheme.typography.titleSmall)
+            OutlinedButton(onClick = onShowTutorial) {
+                Text("Show the tutorial again")
+            }
         }
     }
 }
