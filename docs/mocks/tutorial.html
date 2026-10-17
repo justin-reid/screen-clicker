@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Screen Clicker — tutorial mock v1</title>
+<title>Screen Clicker — tutorial mock v2</title>
 <style>
   :root{
     --doc-bg:#0d1117; --doc-fg:#e6edf3; --doc-dim:#9aa7b4; --doc-line:#243040;
@@ -107,6 +107,17 @@
   }
   .t-page::-webkit-scrollbar{display:none}
 
+  /* real screenshots: shot file present -> image; absent -> dashed placeholder */
+  .t-shot{
+    height:158px; border-radius:16px; margin:6px 0 16px; overflow:hidden;
+    background:var(--surface2); border:1px dashed var(--line);
+    display:flex; align-items:center; justify-content:center;
+  }
+  .t-shot.loaded{border:1px solid var(--line)}
+  .t-shot img{width:100%; height:100%; object-fit:cover; object-position:top; display:block}
+  .t-shot .ph{font-size:11px; color:var(--dim); text-align:center; line-height:1.55; padding:0 22px}
+  .t-shot .ph b{color:var(--fg); font-weight:600}
+
   .t-art{
     height:132px; border-radius:16px; background:var(--surface2);
     border:1px solid var(--line); margin:6px 0 16px;
@@ -132,23 +143,12 @@
   }
   .t-list li .b{flex:1}
   .t-list li .b b{font-weight:650}
-  .t-note{
-    margin-top:12px; padding:9px 11px; border-radius:11px;
-    background:var(--surface2); border:1px solid var(--line);
-    font-size:11.5px; color:var(--dim); line-height:1.5;
-  }
-  .t-note b{color:var(--fg); font-weight:600}
-  .t-kbd{
-    display:inline-block; padding:1px 5px; border-radius:5px; background:var(--surface2);
-    border:1px solid var(--line); font-size:11px; font-weight:600; color:var(--fg);
-  }
   .t-btn-row{display:flex; gap:8px; margin:12px 0 2px}
   .t-btn{
     flex:1; text-align:center; padding:10px 12px; border-radius:11px; font-size:12.5px; font-weight:650;
     border:1px solid var(--line); background:var(--surface2); color:var(--fg);
   }
   .t-btn.done{background:var(--accent); color:#07110d; border-color:transparent}
-  .t-btn .tick{font-weight:800}
 
   /* footer: dots + nav */
   .t-foot{
@@ -188,6 +188,13 @@
     font-size:11.5px; font-weight:600; padding:7px 8px; border-radius:9px; cursor:pointer; font-family:inherit;
   }
   .toggle-row button.on{background:var(--doc-accent); color:#07110d; border-color:transparent}
+  .shots{margin:0; padding:0; list-style:none}
+  .shots li{font-size:12.5px; color:var(--doc-dim); line-height:1.5; margin-bottom:9px}
+  .shots b{color:var(--doc-fg)}
+  .shots code{
+    font-family:ui-monospace,Consolas,monospace; font-size:11px; color:var(--doc-accent);
+    background:#16202c; border:1px solid var(--doc-line); padding:1px 5px; border-radius:5px;
+  }
   .mini{
     background:#16202c; border:1px solid var(--doc-line); border-radius:11px; padding:10px 11px;
     font-size:11.5px; color:var(--doc-dim); line-height:1.5; margin-top:8px;
@@ -239,7 +246,7 @@
           <div class="t-viewport" id="viewport">
             <div class="t-track" id="track">
 
-              <!-- 1 -->
+              <!-- 1 · what it does -->
               <section class="t-page">
                 <div class="t-art">
                   <svg width="252" height="104" viewBox="0 0 252 104" fill="none">
@@ -257,16 +264,13 @@
                     <circle cx="190" cy="52" r="3" fill="#8fc7e8"/>
                   </svg>
                 </div>
-                <div class="t-kicker">What this does</div>
-                <h2>Watch for a picture.<br>Tap where you choose.</h2>
-                <p>You point a rule at a piece of the screen. When that picture shows up, the app taps the spot you picked — again and again, until you stop it.</p>
-                <ul class="t-list">
-                  <li><span class="b">Works in any app, no root, no ADB.</span></li>
-                  <li><span class="b">Everything runs on the phone. Nothing is uploaded.</span></li>
-                </ul>
+                <div class="t-kicker">What it does</div>
+                <h2>Watch for an image.<br>Tap where you choose.</h2>
+                <p>A rule watches part of the screen for an image. When it appears, the app taps the spot you picked — until you stop it.</p>
+                <p class="dim">No root, no ADB. Everything stays on your phone.</p>
               </section>
 
-              <!-- 2 -->
+              <!-- 2 · permissions -->
               <section class="t-page">
                 <div class="t-art">
                   <svg width="252" height="104" viewBox="0 0 252 104" fill="none">
@@ -280,162 +284,48 @@
                     <rect x="27.5" y="70.5" width="5" height="5" rx="1" fill="#ffab91" opacity=".8"/>
                     <rect x="46" y="66" width="102" height="4" rx="2" fill="#42566b"/>
                     <rect x="46" y="74" width="64" height="4" rx="2" fill="#33424f"/>
-                    <rect x="196" y="66" width="34" height="14" rx="7" fill="#2b3d33" stroke="#7fd1ae" stroke-width="1.2"/>
-                    <circle cx="224" cy="73" r="4.5" fill="#7fd1ae"/>
                     <rect x="196" y="22" width="34" height="14" rx="7" fill="#1d2a33" stroke="#42566b" stroke-width="1.2"/>
                     <circle cx="204" cy="29" r="4.5" fill="#42566b"/>
+                    <rect x="196" y="66" width="34" height="14" rx="7" fill="#2b3d33" stroke="#7fd1ae" stroke-width="1.2"/>
+                    <circle cx="224" cy="73" r="4.5" fill="#7fd1ae"/>
                   </svg>
                 </div>
-                <div class="t-kicker">Before anything works</div>
+                <div class="t-kicker">Set up</div>
                 <h2>Two permissions</h2>
-                <p class="dim">Both start off. Nothing taps or draws over apps until you switch them on.</p>
                 <ul class="t-list">
-                  <li><span class="n">1</span><span class="b"><b>Accessibility service</b> — lets it see the screen and tap for you.</span></li>
-                  <li><span class="n">2</span><span class="b"><b>Display over other apps</b> — lets the rule editor and the floating panel sit on top of your game.</span></li>
+                  <li><span class="n">1</span><span class="b"><b>Accessibility service</b> — see the screen and tap for you.</span></li>
+                  <li><span class="n">2</span><span class="b"><b>Display over other apps</b> — keep the rule editor and panel on top.</span></li>
                 </ul>
                 <div class="t-btn-row">
                   <span class="t-btn">Enable accessibility</span>
                   <span class="t-btn">Allow over apps</span>
                 </div>
-                <div class="t-note">These buttons open the exact Android screen — you never have to hunt through Settings.</div>
               </section>
 
-              <!-- 3 -->
+              <!-- 3 · build -->
               <section class="t-page">
-                <div class="t-art">
-                  <svg width="252" height="104" viewBox="0 0 252 104" fill="none">
-                    <rect x="16" y="8" width="220" height="88" rx="11" stroke="#3a4b5e" stroke-width="1.5"/>
-                    <rect x="32" y="24" width="188" height="28" rx="8" fill="#2b3d33" stroke="#7fd1ae" stroke-width="1.6"/>
-                    <circle cx="48" cy="38" r="6.5" stroke="#7fd1ae" stroke-width="1.6"/>
-                    <circle cx="48" cy="38" r="3" fill="#7fd1ae"/>
-                    <rect x="64" y="35" width="60" height="5" rx="2.5" fill="#9fd7bb"/>
-                    <rect x="180" y="31" width="28" height="14" rx="7" fill="#7fd1ae"/>
-                    <circle cx="201" cy="38" r="4.5" fill="#0d1a15"/>
-                    <rect x="32" y="62" width="188" height="24" rx="8" stroke="#42566b" stroke-width="1.4"/>
-                    <circle cx="48" cy="74" r="6.5" stroke="#5b7086" stroke-width="1.6"/>
-                    <rect x="64" y="71" width="44" height="5" rx="2.5" fill="#5b7086"/>
-                    <path d="M226 96 l-9 -12 h18 z" fill="#7fd1ae" opacity=".9"/>
-                  </svg>
-                </div>
-                <div class="t-kicker">Once, at the first run</div>
-                <h2>Share <span style="white-space:nowrap">entire screen</span> — not one app</h2>
-                <p>Android asks what to share the first time a script runs. Pick <b>Entire screen</b>.</p>
-                <p class="dim">A “single app” grant looks like it works, but the script can only see that one window — so the panel tells you and the run stops. Just confirm again with <b>Entire screen</b>.</p>
-                <div class="t-note">Shown by Android, not by us — but it is the step people get wrong, so the tutorial says it up front.</div>
-              </section>
-
-              <!-- 4 -->
-              <section class="t-page">
-                <div class="t-art">
-                  <svg width="252" height="104" viewBox="0 0 252 104" fill="none">
-                    <rect x="20" y="10" width="212" height="30" rx="9" stroke="#3a4b5e" stroke-width="1.5"/>
-                    <rect x="32" y="20" width="58" height="5" rx="2.5" fill="#42566b"/>
-                    <rect x="32" y="29" width="88" height="4" rx="2" fill="#33424f"/>
-                    <rect x="188" y="17" width="34" height="16" rx="8" fill="#7fd1ae"/>
-                    <rect x="196" y="22" width="18" height="6" rx="3" fill="#0d1a15"/>
-                    <rect x="20" y="48" width="212" height="30" rx="9" stroke="#7fd1ae" stroke-width="1.6"/>
-                    <rect x="32" y="58" width="72" height="5" rx="2.5" fill="#9fd7bb"/>
-                    <rect x="32" y="67" width="104" height="4" rx="2" fill="#33424f"/>
-                    <rect x="188" y="55" width="34" height="16" rx="8" stroke="#7fd1ae" stroke-width="1.2"/>
-                    <rect x="196" y="60" width="18" height="6" rx="3" fill="#7fd1ae" opacity=".55"/>
-                    <rect x="20" y="86" width="212" height="1" rx=".5" fill="#2b3949"/>
-                    <path d="M120 100 h12 M126 96 v8" stroke="#42566b" stroke-width="1.5"/>
-                  </svg>
-                </div>
-                <div class="t-kicker">Step 1 of 3</div>
-                <h2>Make a script</h2>
-                <p>A script is one app’s worth of rules. <b>New script</b>, name it, and you are in.</p>
+                <div class="t-shot" data-shot="shots/editor.png" data-label="Rule editor over your game — Search, Template and Click areas boxed"></div>
+                <div class="t-kicker">Build</div>
+                <h2>New script → Add rule</h2>
                 <ul class="t-list">
-                  <li><span class="b"><b>Run only in this app</b> (optional): paste the package name so the script stays quiet when that app is not in front.</span></li>
-                  <li><span class="b">Rules run in order, each with its own delay — that is what stops it from hammering the screen.</span></li>
+                  <li><span class="n">1</span><span class="b"><b>Search area</b> — where to look.</span></li>
+                  <li><span class="n">2</span><span class="b"><b>Template area</b> — the image to find, then <b>Capture</b>.</span></li>
+                  <li><span class="n">3</span><span class="b"><b>Click area</b> — where to tap.</span></li>
+                  <li><span class="n">4</span><span class="b"><b>Check</b>, then <b>Save</b>.</span></li>
                 </ul>
-                <div class="t-note">Not sure of the package name? Leave it blank while testing; the script then runs in whatever app is on screen.</div>
+                <p class="dim" style="margin-top:10px">Switch app keeps the toolbar up while you bring your game forward.</p>
               </section>
 
-              <!-- 5 -->
+              <!-- 4 · run -->
               <section class="t-page">
-                <div class="t-art">
-                  <svg width="252" height="104" viewBox="0 0 252 104" fill="none">
-                    <rect x="6" y="8" width="240" height="20" rx="7" stroke="#3a4b5e" stroke-width="1.4"/>
-                    <rect x="16" y="14" width="40" height="8" rx="4" stroke="#5b7086" stroke-width="1.2"/>
-                    <rect x="62" y="13" width="34" height="10" rx="5" fill="#2b3d33" stroke="#7fd1ae" stroke-width="1.2"/>
-                    <rect x="102" y="13" width="34" height="10" rx="5" stroke="#42566b" stroke-width="1.2"/>
-                    <rect x="142" y="13" width="34" height="10" rx="5" stroke="#42566b" stroke-width="1.2"/>
-                    <rect x="182" y="13" width="28" height="10" rx="5" fill="#7fd1ae"/>
-                    <rect x="214" y="13" width="24" height="10" rx="5" stroke="#42566b" stroke-width="1.2"/>
-                    <rect x="24" y="40" width="204" height="58" rx="8" stroke="#3a4b5e" stroke-width="1.4"/>
-                    <rect x="36" y="52" width="64" height="34" rx="5" stroke="#7fd1ae" stroke-width="1.6" stroke-dasharray="4 3"/>
-                    <rect x="46" y="61" width="44" height="16" rx="3" fill="#2b3d33" stroke="#7fd1ae" stroke-width="1.2"/>
-                    <rect x="114" y="52" width="102" height="16" rx="4" stroke="#8fc7e8" stroke-width="1.2"/>
-                    <rect x="114" y="74" width="102" height="12" rx="4" stroke="#8fc7e8" stroke-width="1.2" opacity=".6"/>
-                    <text x="36" y="38" fill="#5f7183" font-family="monospace" font-size="7">search</text>
-                    <text x="114" y="38" fill="#5f7183" font-family="monospace" font-size="7">template</text>
-                    <text x="208" y="38" fill="#5f7183" font-family="monospace" font-size="7">click</text>
-                  </svg>
-                </div>
-                <div class="t-kicker">Step 2 of 3 · the important one</div>
-                <h2>Teach it one rule</h2>
+                <div class="t-shot" data-shot="shots/panel.png" data-label="Floating panel over your game, script running"></div>
+                <div class="t-kicker">Run</div>
+                <h2>Run it</h2>
                 <ul class="t-list">
-                  <li><span class="n">1</span><span class="b"><b>Search area</b> — box the part of the screen worth watching.</span></li>
-                  <li><span class="n">2</span><span class="b"><b>Template area</b> — box the exact picture to look for, then <b>Capture</b>.</span></li>
-                  <li><span class="n">3</span><span class="b"><b>Click area</b> — box where the tap should land.</span></li>
-                  <li><span class="n">4</span><span class="b"><b>Check</b> — one test match, no tapping. Then <b>Save</b>.</span></li>
+                  <li><span class="b">Start from the app or the floating panel.</span></li>
+                  <li><span class="b">First run: Android asks what to share — pick <b>Entire screen</b>.</span></li>
+                  <li><span class="b"><b>Options ▸</b>: Highlight matches, Show taps, runner log.</span></li>
                 </ul>
-                <div class="t-note"><b>Switch app</b> leaves the toolbar on screen while you bring your game forward. Drag the title bar to move it out of the way.</div>
-              </section>
-
-              <!-- 6 -->
-              <section class="t-page">
-                <div class="t-art">
-                  <svg width="252" height="104" viewBox="0 0 252 104" fill="none">
-                    <rect x="8" y="18" width="70" height="70" rx="14" stroke="#3a4b5e" stroke-width="1.5"/>
-                    <circle cx="43" cy="53" r="16" fill="#2b3d33" stroke="#7fd1ae" stroke-width="1.6"/>
-                    <path d="M38 46 L51 53 L38 60 Z" fill="#7fd1ae"/>
-                    <path d="M78 53 H100" stroke="#42566b" stroke-width="1.5" stroke-dasharray="3 3"/>
-                    <rect x="104" y="14" width="140" height="80" rx="12" stroke="#3a4b5e" stroke-width="1.5"/>
-                    <rect x="112" y="22" width="124" height="14" rx="5" fill="#22303c" stroke="#33424f"/>
-                    <text x="118" y="32" fill="#9fb0be" font-family="monospace" font-size="7">SCREEN CLICKER</text>
-                    <text x="216" y="32" fill="#5f7183" font-family="monospace" font-size="9">— ✕</text>
-                    <text x="118" y="46" fill="#7fd1ae" font-family="monospace" font-size="7">Running: Farm RPG</text>
-                    <rect x="112" y="52" width="70" height="11" rx="4" stroke="#33424f"/>
-                    <text x="118" y="60" fill="#cfd8dc" font-family="monospace" font-size="6.5">▸ Options</text>
-                    <text x="118" y="75" fill="#5f7183" font-family="monospace" font-size="6.5">hold ▮ = stop</text>
-                    <rect x="186" y="52" width="50" height="34" rx="8" stroke="#8fc7e8" stroke-width="1.2" stroke-dasharray="3 3"/>
-                    <circle cx="211" cy="69" r="7" stroke="#8fc7e8" stroke-width="1.4"/>
-                    <path d="M211 65 v8 M207 69 h8" stroke="#8fc7e8" stroke-width="1.2"/>
-                  </svg>
-                </div>
-                <div class="t-kicker">Step 3 of 3</div>
-                <h2>Run it, then get out of the way</h2>
-                <p>Start it from the app, the <b>Quick Settings tile</b>, or the floating panel — the little ▶ bubble that sits over your game.</p>
-                <ul class="t-list">
-                  <li><span class="b">While a script runs the panel has <b>no ✕</b>. It is the stop button, so it stays put; minimize it to the bubble instead (it turns ■).</span></li>
-                  <li><span class="b"><b>Options ▸</b> in the panel holds <b>Highlight matches</b>, <b>Show taps</b> and the <b>runner log</b>.</span></li>
-                </ul>
-              </section>
-
-              <!-- 7 -->
-              <section class="t-page">
-                <div class="t-art">
-                  <svg width="252" height="104" viewBox="0 0 252 104" fill="none">
-                    <rect x="14" y="8" width="224" height="88" rx="10" fill="#151d28" stroke="#3a4b5e" stroke-width="1.5"/>
-                    <text x="26" y="26" fill="#7fd1ae" font-family="monospace" font-size="7">frame 1080x2400 · search 240x180</text>
-                    <text x="26" y="40" fill="#cfd8dc" font-family="monospace" font-size="7">best 0.91 @ (512,1400) · threshold 0.85</text>
-                    <text x="26" y="54" fill="#8fc7e8" font-family="monospace" font-size="7">match → tap (620,1820) in 240ms</text>
-                    <text x="26" y="68" fill="#ffab91" font-family="monospace" font-size="7">below threshold · retry in 800ms</text>
-                    <rect x="26" y="78" width="120" height="4" rx="2" fill="#33424f"/>
-                    <rect x="26" y="78" width="88" height="4" rx="2" fill="#7fd1ae"/>
-                    <text x="152" y="82" fill="#5f7183" font-family="monospace" font-size="6.5">score vs threshold</text>
-                  </svg>
-                </div>
-                <div class="t-kicker">If nothing happens</div>
-                <h2>Read the runner log</h2>
-                <p><b>Options ▸ Runner log</b> in the panel prints what the runner saw: the frame it captured, the region it searched, the best match score, and your threshold.</p>
-                <ul class="t-list">
-                  <li><span class="b">Score just under the threshold → redraw the template tighter, or lower the threshold in the rule.</span></li>
-                  <li><span class="b">Nothing at all found → <b>Highlight matches</b> draws the search area, so you can see whether the box is even in the right place.</span></li>
-                </ul>
-                <div class="t-note">You can replay this any time from <b>Settings → Show the tutorial again</b>.</div>
               </section>
 
             </div>
@@ -451,7 +341,7 @@
         </div>
       </div>
     </div>
-    <p class="hint">Drag / swipe the pages, or use ← → keys. This is a mock, not the app.</p>
+    <p class="hint">Drag / swipe the pages, or use ← → keys. Mock, not the app.</p>
   </div>
 
   <!-- ============ SIDEBAR ============ -->
@@ -459,7 +349,7 @@
 
     <div class="panel">
       <h3>Mock controls</h3>
-      <p><b>Presentation</b> — a dialog over the app, or full-screen pages. Same content either way.</p>
+      <p><b>Presentation</b> — a dialog over the app, or full-screen pages.</p>
       <div class="toggle-row" id="modeRow">
         <button data-mode="card" class="on">Card (dialog)</button>
         <button data-mode="full">Full screen</button>
@@ -472,31 +362,39 @@
     </div>
 
     <div class="panel">
-      <h3>Pages (7)</h3>
+      <h3>Pages (4)</h3>
       <ul class="toc" id="toc"></ul>
     </div>
 
     <div class="panel">
+      <h3>Screenshots needed</h3>
+      <ul class="shots">
+        <li><b>editor.png</b> — rule editor over your game, toolbar up, the three areas boxed. <code>shots/editor.png</code></li>
+        <li><b>panel.png</b> — floating panel expanded over your game. <code>shots/panel.png</code></li>
+      </ul>
+      <p>Portrait, full resolution from your phone. Drop the files into <code>docs/mocks/shots/</code> and refresh — the mock picks them up; the dashed boxes disappear.</p>
+      <p>In the app they'll ship as bundled assets under <code>assets/tutorial/</code>, scaled to fit the card.</p>
+    </div>
+
+    <div class="panel">
       <h3>Where it appears</h3>
-      <p><b>First launch</b>, before you make a script: shown once, on top of the Scripts screen. Skipping counts as seen (otherwise it nags).</p>
-      <p><b>Again on demand</b>, from a new Help card in Settings:</p>
+      <p><b>First launch</b>: shown once, on top of the Scripts screen. Skipping counts as seen.</p>
+      <p><b>Again on demand</b>, from a Help card in Settings:</p>
       <div class="mini">
         <div class="row"><span>Help</span><span></span></div>
         <div class="row"><span>Show the tutorial again</span><span>▸</span></div>
         <div class="row"><span>Highlight matches while running</span><span>on</span></div>
         <div class="row"><span>Show the floating panel</span><span>on</span></div>
       </div>
-      <p style="margin-top:10px">One flag in settings (<b>tutorialSeen</b>) drives both: first launch shows it while false, the Settings row flips it back and opens it immediately.</p>
+      <p style="margin-top:10px">One flag (<b>tutorialSeen</b>): first launch shows it while false; the Settings row flips it back and opens it.</p>
     </div>
 
     <div class="panel">
       <h3>To decide</h3>
       <ul class="q">
-        <li><b>7 pages or 5?</b> Page 3 (entire screen) could fold into page 2; page 4 (scripts) into page 5.</li>
-        <li><b>Buttons that open settings</b> on page 2 — do it live (with a tick when granted), or keep the tutorial read-only and let the existing prompts do the work?</li>
-        <li><b>Card or full screen?</b> Card keeps the Scripts screen visible behind it and feels less like a wall.</li>
-        <li><b>Show on every fresh install only</b>, or also after a big change (a "what's new" page)?</li>
-        <li><b>Wording:</b> second person and terse, or friendlier with more hand-holding? Right now it is terse.</li>
+        <li><b>Card or full screen?</b></li>
+        <li><b>Permission buttons on page 2</b> — live (open each Android screen, tick when granted), or leave those prompts to the existing flows?</li>
+        <li><b>Quick Settings tile</b> — exists in the app (<code>ClickerTileService</code>) but cut from the copy since it wasn't recognized. Keep it out, or feature it?</li>
       </ul>
     </div>
 
@@ -516,15 +414,7 @@
   var pages = Array.prototype.slice.call(track.children);
   var index = 0;
 
-  var titles = [
-    '1. Watch for a picture',
-    '2. Two permissions',
-    '3. Share entire screen',
-    '4. Make a script',
-    '5. Teach it one rule',
-    '6. Run it',
-    '7. Read the runner log'
-  ];
+  var titles = ['Watch & tap', 'Two permissions', 'Build a rule', 'Run it'];
 
   pages.forEach(function (_, i) {
     var d = document.createElement('span');
@@ -533,10 +423,29 @@
 
     var li = document.createElement('li');
     var b = document.createElement('button');
-    b.innerHTML = '<span class="num">' + (i + 1) + '</span>' + titles[i].replace(/^\d+\.\s*/, '');
+    b.innerHTML = '<span class="num">' + (i + 1) + '</span>' + titles[i];
     b.addEventListener('click', function () { go(i); });
     li.appendChild(b);
     toc.appendChild(li);
+  });
+
+  // real screenshots: load shots/<name> if present, else keep the dashed placeholder
+  Array.prototype.forEach.call(document.querySelectorAll('.t-shot'), function (slot) {
+    var img = new Image();
+    img.onload = function () {
+      slot.classList.add('loaded');
+      slot.innerHTML = '';
+      slot.appendChild(img);
+    };
+    img.onerror = function () {
+      var ph = document.createElement('div');
+      ph.className = 'ph';
+      ph.innerHTML = '<b>Screenshot:</b><br>' + slot.dataset.label +
+        '<br><span style="opacity:.7">add ' + slot.dataset.shot + ' next to this file</span>';
+      slot.innerHTML = '';
+      slot.appendChild(ph);
+    };
+    img.src = slot.dataset.shot;
   });
 
   function go(i) {
