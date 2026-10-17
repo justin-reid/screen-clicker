@@ -40,6 +40,7 @@
     <string name="overlay_align_fallback">Capture alignment probe not visible — using the window position instead.</string>
     <string name="overlay_capture_changed">The area changed during the capture — try again.</string>
     <string name="overlay_enable_access">Enable access</string>
+    <string name="access_settings_failed">Couldn\'t open Accessibility settings — turn the service on in Settings, Accessibility</string>
     <string name="overlay_enable_hint">In the list, tap Screen Clicker, turn it on, then return here.</string>
 
     <string name="channel_panel">Floating panel</string>

@@ -599,8 +599,18 @@ class ConfigOverlayService : Service() {
         }
 
         override fun onEnableAccess() {
-            runCatching { openAccessibilitySettings() }
-            setStatus(getString(R.string.overlay_enable_hint))
+            // Same service-context rule as the floating panel: the helper carries
+            // NEW_TASK, and the result decides whether the status line can claim the
+            // settings screen is on its way.
+            setStatus(
+                getString(
+                    if (openAccessibilitySettings()) {
+                        R.string.overlay_enable_hint
+                    } else {
+                        R.string.access_settings_failed
+                    },
+                ),
+            )
         }
 
         override fun onSave() {

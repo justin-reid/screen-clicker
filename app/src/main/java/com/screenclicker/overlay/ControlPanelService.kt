@@ -489,7 +489,17 @@ class ControlPanelService : Service() {
         }
 
         override fun onEnableAccess() {
-            runCatching { openAccessibilitySettings() }
+            // A service context needs FLAG_ACTIVITY_NEW_TASK (inside the helper), and a
+            // failure has to be said out loud: this row exists because access is off, so a
+            // tap that does nothing leaves the user with no idea what to do next. The status
+            // line and this row clear themselves once the poll sees the service come up.
+            if (!openAccessibilitySettings()) {
+                Toast.makeText(
+                    this@ControlPanelService,
+                    getString(R.string.access_settings_failed),
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
         }
     }
 

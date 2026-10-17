@@ -381,9 +381,26 @@ internal fun toPreviewBitmap(result: CaptureResult.Success): ImageBitmap {
     return scaled.asImageBitmap()
 }
 
-internal fun Context.openAccessibilitySettings() {
-    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-}
+/**
+ * Opens the system accessibility settings, where this app's service is actually switched on.
+ *
+ * `FLAG_ACTIVITY_NEW_TASK` is load-bearing here, not boilerplate: both overlay services call
+ * this from a *Service* context (the panel's "Enable access" row, the editor toolbar's
+ * button), and `startActivity()` without it throws `AndroidRuntimeException` from there —
+ * "Calling startActivity() from outside of an Activity context requires the
+ * FLAG_ACTIVITY_NEW_TASK flag". Both callers wrapped the call in `runCatching`, so that
+ * throw made those buttons look dead instead of wrong.
+ *
+ * Returns whether the settings screen was opened at all, so a caller can tell the user when
+ * it could not be — a silent `runCatching` is how the above stayed invisible.
+ */
+internal fun Context.openAccessibilitySettings(): Boolean =
+    runCatching {
+        startActivity(
+            Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+    }.isSuccess
 
 /**
  * Turns the floating control panel on or off, remembering the choice and asking for the

@@ -99,6 +99,15 @@ app/
   panel open, not a setting, so a restarted panel always comes back compact. The folded
   rows are not added to the view at all rather than hidden, and the flag is part of the
   structural key so the fold actually rebuilds the list.
+- **`startActivity` from a service context needs `FLAG_ACTIVITY_NEW_TASK`.**
+  `Context.openAccessibilitySettings()` is called from the two overlay services — the floating
+  panel's "Enable access" row and the editor toolbar's button. Without the flag it throws
+  `AndroidRuntimeException` ("Calling startActivity() from outside of an Activity context
+  requires the FLAG_ACTIVITY_NEW_TASK flag"), and both callers wrapped it in a bare
+  `runCatching`, so the panel's button was simply a control that did nothing. The helper now
+  carries the flag and returns whether the screen opened, and the callers say so when it did
+  not. Any user-visible action wrapped in `runCatching` needs a failure path — a swallowed
+  exception and a dead control look identical on a phone.
 - **Overlay windows use FLAG_LAYOUT_NO_LIMITS + FLAG_LAYOUT_IN_SCREEN** so view
   coordinates equal screenshot pixels (status bar included). Never switch to default
   window geometry — every stored rect would be off by the status bar height.
